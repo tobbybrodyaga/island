@@ -1,0 +1,63 @@
+{
+  "name": "pc-dynamic-island",
+  "version": "0.1.0",
+  "description": "Dynamic Island для Windows: задачи, таймеры, Pomodoro",
+  "main": "dist-electron/main.js",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc -p tsconfig.node.json --noEmit && vite build && node scripts/build-electron.mjs",
+    "preview": "npm run build && electron .",
+    "dist:win": "npm run build && powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-share.ps1"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "framer-motion": "^11.18.2",
+    "koffi": "^3.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "electron": "^34.0.2",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.11",
+    "wait-on": "^8.0.2"
+  },
+  "build": {
+    "appId": "local.pc.dynamicisland",
+    "productName": "Dynamic Island",
+    "copyright": "Private",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "Dynamic-Island-Portable.${ext}"
+    },
+    "portable": {
+      "artifactName": "Dynamic-Island-Portable.${ext}"
+    }
+  }
+}
