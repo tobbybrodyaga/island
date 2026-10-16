@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   /* Apple Control Center / macOS dark */
   --bg: #1c1c1e;
   --bg-elevated: #2c2c2e;
@@ -2351,7 +2351,8 @@ html.glass-mode .app-root {
   cursor: default;
 }
 
-.shots-delete-confirm {
+.tiny-btn.shots-delete-confirm,
+.tiny-btn.shots-delete-confirm:hover {
   background: var(--danger);
   color: #fff;
 }
