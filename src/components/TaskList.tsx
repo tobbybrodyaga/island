@@ -17,6 +17,8 @@ interface TaskListProps {
   onAddSubtask: (taskId: string, title: string) => void;
   onToggleSubtask: (taskId: string, subtaskId: string) => void;
   onRemoveSubtask: (taskId: string, subtaskId: string) => void;
+  onUpdateTitle: (id: string, title: string) => void;
+  onUpdateSubtaskTitle: (taskId: string, subtaskId: string, title: string) => void;
   onStartTimer: (id: string) => void;
   onPauseTimer: (id: string) => void;
   onResetTimer: (id: string) => void;
@@ -38,6 +40,8 @@ export function TaskList({
   onAddSubtask,
   onToggleSubtask,
   onRemoveSubtask,
+  onUpdateTitle,
+  onUpdateSubtaskTitle,
   onStartTimer,
   onPauseTimer,
   onResetTimer,
@@ -135,6 +139,10 @@ export function TaskList({
               onAddSubtask={(sub) => onAddSubtask(task.id, sub)}
               onToggleSubtask={(subId) => onToggleSubtask(task.id, subId)}
               onRemoveSubtask={(subId) => onRemoveSubtask(task.id, subId)}
+              onUpdateTitle={(value) => onUpdateTitle(task.id, value)}
+              onUpdateSubtaskTitle={(subId, value) =>
+                onUpdateSubtaskTitle(task.id, subId, value)
+              }
               onStartTimer={() => onStartTimer(task.id)}
               onPauseTimer={() => onPauseTimer(task.id)}
               onResetTimer={() => onResetTimer(task.id)}

@@ -25,6 +25,8 @@ export default function App() {
       onAddSubtask={store.addSubtask}
       onToggleSubtask={store.toggleSubtaskDone}
       onRemoveSubtask={store.removeSubtask}
+      onUpdateTitle={store.updateTaskTitle}
+      onUpdateSubtaskTitle={store.updateSubtaskTitle}
       onStartTimer={store.startStopwatch}
       onPauseTimer={store.pauseStopwatch}
       onResetTimer={store.resetStopwatch}

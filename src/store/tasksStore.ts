@@ -95,6 +95,7 @@ interface UseIslandStoreResult {
   addSubtask: (taskId: string, title: string) => void;
   toggleSubtaskDone: (taskId: string, subtaskId: string) => void;
   removeSubtask: (taskId: string, subtaskId: string) => void;
+  updateSubtaskTitle: (taskId: string, subtaskId: string, title: string) => void;
   startStopwatch: (taskId: string) => void;
   pauseStopwatch: (taskId: string) => void;
   resetStopwatch: (taskId: string) => void;
@@ -622,6 +623,30 @@ export function useIslandStore(): UseIslandStoreResult {
     }));
   }, []);
 
+  /** Переименовывает подзадачу; пустое название не сохраняется */
+  const updateSubtaskTitle = useCallback(
+    (taskId: string, subtaskId: string, title: string) => {
+      const trimmed = title.trim();
+      if (!trimmed) {
+        return;
+      }
+      setTasksState((prev) => ({
+        ...prev,
+        tasks: prev.tasks.map((task) =>
+          task.id === taskId
+            ? {
+                ...task,
+                subtasks: task.subtasks.map((s) =>
+                  s.id === subtaskId ? { ...s, title: trimmed } : s,
+                ),
+              }
+            : task,
+        ),
+      }));
+    },
+    [],
+  );
+
   const startStopwatch = useCallback((taskId: string) => {
     setTasksState((prev) => {
       let focusMs = 0;
@@ -962,6 +987,7 @@ export function useIslandStore(): UseIslandStoreResult {
     addSubtask,
     toggleSubtaskDone,
     removeSubtask,
+    updateSubtaskTitle,
     startStopwatch,
     pauseStopwatch,
     resetStopwatch,

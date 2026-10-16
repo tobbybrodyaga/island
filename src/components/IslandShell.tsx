@@ -165,6 +165,8 @@ interface IslandShellProps {
   onAddSubtask: (taskId: string, title: string) => void;
   onToggleSubtask: (taskId: string, subtaskId: string) => void;
   onRemoveSubtask: (taskId: string, subtaskId: string) => void;
+  onUpdateTitle: (id: string, title: string) => void;
+  onUpdateSubtaskTitle: (taskId: string, subtaskId: string, title: string) => void;
   onStartTimer: (id: string) => void;
   onPauseTimer: (id: string) => void;
   onResetTimer: (id: string) => void;
@@ -1236,6 +1238,8 @@ export function IslandShell(props: IslandShellProps) {
                       onAddSubtask={props.onAddSubtask}
                       onToggleSubtask={props.onToggleSubtask}
                       onRemoveSubtask={props.onRemoveSubtask}
+                      onUpdateTitle={props.onUpdateTitle}
+                      onUpdateSubtaskTitle={props.onUpdateSubtaskTitle}
                       onStartTimer={props.onStartTimer}
                       onPauseTimer={props.onPauseTimer}
                       onResetTimer={props.onResetTimer}
