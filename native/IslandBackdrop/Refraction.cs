@@ -120,7 +120,7 @@ internal struct RefractionParams
     public Vector4 Radii;
     /// <summary>x — число фигур, y — сила преломления px, z — ширина фаски px, w — тинт</summary>
     public Vector4 Optics;
-    /// <summary>x — сила блика, y — вес кольца преломления, z — 1 для прозрачного стекла</summary>
+    /// <summary>x — сила блика, y — вес кольца преломления, z — 1 для прозрачного стекла, w — дисперсия</summary>
     public Vector4 Light;
 }
 
@@ -195,10 +195,20 @@ float4 PS(VSOut i) : SV_Target
     float depth = saturate(-d / bezel);
     float edge = 1.0 - sqrt(saturate((2.0 - depth) * depth));
 
-    float2 src = Origin.xy + p - n * edge * Optics.y;
-    src = clamp(src, float2(0.5, 0.5), Origin.zw - 0.5);
-    float3 c = Cap.SampleLevel(Samp, src / Origin.zw, 0).rgb;
     bool clearGlass = Light.z > 0.5;
+    float2 disp = n * edge * Optics.y;
+    float2 lo = float2(0.5, 0.5);
+    float2 hi = Origin.zw - 0.5;
+    float2 src = clamp(Origin.xy + p - disp, lo, hi);
+    float3 c = Cap.SampleLevel(Samp, src / Origin.zw, 0).rgb;
+    if (clearGlass && Light.w > 0.0)
+    {
+        // Дисперсия у кромки: красный и синий преломляются чуть по-разному
+        float2 srcR = clamp(Origin.xy + p - disp * (1.0 - Light.w), lo, hi);
+        float2 srcB = clamp(Origin.xy + p - disp * (1.0 + Light.w), lo, hi);
+        c.r = Cap.SampleLevel(Samp, srcR / Origin.zw, 0).r;
+        c.b = Cap.SampleLevel(Samp, srcB / Origin.zw, 0).b;
+    }
     if (clearGlass)
     {
         // materials.ts clear/dark: подъём теней, срез светов и лёгкий бледный тон
@@ -215,7 +225,9 @@ float4 PS(VSOut i) : SV_Target
     // maps.wgsl: направленный блик сверху и снизу по тонкой кромке
     float cs = cos(1.08);
     float directional = pow(saturate((abs(n.y) - cs) / (1.0 - cs)), 1.25);
-    float stroke = saturate(1.0 - abs(d + 0.9) / 0.9);
+    // У прозрачного стекла кромка блика шире и мягче
+    float strokeWidth = clearGlass ? 1.4 : 0.9;
+    float stroke = saturate(1.0 - abs(d + strokeWidth) / strokeWidth);
     float spec = directional * stroke;
     spec = spec / (1.0 + 0.5 * (1.0 - spec));
     float diffuse = directional * 0.18 * pow(1.0 - saturate(-d / 4.5), 2.0);
@@ -414,11 +426,18 @@ float4 PS(VSOut i) : SV_Target
         p.Shape3 = rects[3];
         p.Radii = new Vector4(radii[0], radii[1], radii[2], radii[3]);
 
-        // Как в Glass-HQ: преломление маленькой фигуры ограничено её отступом
-        var bezel = Math.Clamp(minDim * 0.3f, 4f, 20f);
-        var refraction = Math.Clamp(minDim * 0.35f, 4f, 30f);
+        // Как в Glass-HQ: преломление маленькой фигуры ограничено её отступом.
+        // Прозрачное стекло — сильнее изгиб, ярче блик и радужная кромка.
+        var bezel = clear
+            ? Math.Clamp(minDim * 0.42f, 5f, 26f)
+            : Math.Clamp(minDim * 0.3f, 4f, 20f);
+        var refraction = clear
+            ? Math.Clamp(minDim * 0.55f, 6f, 40f)
+            : Math.Clamp(minDim * 0.35f, 4f, 30f);
+        var specular = clear ? 1.5f : 0.9f;
+        var chroma = clear ? 0.06f : 0f;
         p.Optics = new Vector4(count, refraction, bezel, (float)Math.Clamp(tint, 0, 1));
-        p.Light = new Vector4(0.9f, 1.0f, clear ? 1f : 0f, 0);
+        p.Light = new Vector4(specular, 1.0f, clear ? 1f : 0f, chroma);
         p.Origin = new Vector4(
             windowX - _monitorRect.Left,
             windowY - _monitorRect.Top,
