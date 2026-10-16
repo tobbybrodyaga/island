@@ -2268,10 +2268,29 @@ html.glass-mode .app-root {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
 }
 
-/* У левого и правого края капсула вертикальная — текст идёт вдоль неё */
+/* У левого и правого края капсула вертикальная — текст идёт вдоль неё.
+   width: auto — иначе в vertical-rl строка прижимается к правому краю,
+   max-height и overflow не дают тексту уехать за торцы капсулы. */
+.island--vertical:not(.island--expanded):not(.island--live) .pill-inner {
+  padding: 6px 0;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
 .island--vertical:not(.island--expanded):not(.island--live) .pill-activity {
   writing-mode: vertical-rl;
   justify-content: center;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.island--vertical:not(.island--expanded):not(.island--live) .pill-caption {
+  margin-left: 0;
+  margin-inline-start: 5px;
 }
 
 /* ---------- Правка названий задач и подзадач (этап 3) ---------- */
@@ -2502,20 +2521,44 @@ html.glass-mode .app-root {
 }
 
 /* ---------- Прозрачная панель clear ----------
-   Стекло без блюра: текст держат тёмные стеклянные плашки под строками. */
+   Стекло без блюра: текст держат тёмные стеклянные плашки.
+   Все плашки одного уровня одинаково прозрачны (--lg-plate);
+   то, что лежит внутри плашки, своего тёмного фона не добавляет. */
+
+:root {
+  --lg-plate: rgba(14, 14, 18, 0.36);
+  --lg-plate-active: rgba(10, 70, 140, 0.4);
+}
 
 .island--material-clear.island--expanded .panel-rail {
-  background: rgba(14, 14, 18, 0.42) !important;
+  background: var(--lg-plate) !important;
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.08);
 }
 
-.island--material-clear.island--expanded .task-item {
-  background: var(--lg-sheen), rgba(14, 14, 18, 0.5);
-  box-shadow: var(--lg-rim), 0 2px 8px rgba(0, 0, 0, 0.22);
+.island--material-clear.island--expanded .task-item,
+.island--material-clear.island--expanded .map-stat,
+.island--material-clear.island--expanded .map-calendar,
+.island--material-clear.island--expanded .notes-input,
+.island--material-clear.island--expanded .clipboard-item,
+.island--material-clear.island--expanded .quick-item,
+.island--material-clear.island--expanded .pomodoro,
+.island--material-clear.island--expanded .translator-out {
+  background: var(--lg-sheen), var(--lg-plate);
+  box-shadow: var(--lg-rim), 0 2px 8px rgba(0, 0, 0, 0.18);
+  border-color: transparent;
 }
 
 .island--material-clear.island--expanded .task-item--active {
-  background: var(--lg-sheen), rgba(10, 70, 140, 0.5);
+  background: var(--lg-sheen), var(--lg-plate-active);
+}
+
+/* Внутри плашки — только светлая подсветка, без второго слоя затемнения */
+.island--material-clear.island--expanded .map-day {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.island--material-clear.island--expanded .map-day--out {
+  background: transparent;
 }
 
 .island--material-clear.island--expanded .task-scroll {
@@ -2527,12 +2570,4 @@ html.glass-mode .app-root {
 .island--material-clear.island--expanded .motivation,
 .island--material-clear.island--expanded .panel-content {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-}
-
-.island--material-clear.island--expanded .map-stat,
-.island--material-clear.island--expanded .map-calendar,
-.island--material-clear.island--expanded .notes-input,
-.island--material-clear.island--expanded .clipboard-item,
-.island--material-clear.island--expanded .quick-item {
-  background: rgba(14, 14, 18, 0.5);
 }

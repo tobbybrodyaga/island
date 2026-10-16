@@ -644,7 +644,13 @@ export function IslandShell(props: IslandShellProps) {
           setTopCenter(payload.topCenter);
         }
         if (typeof payload.sizeScale === 'number' && payload.sizeScale > 0) {
+          const scaleChanged = payload.sizeScale !== sizeScaleRef.current;
           sizeScaleRef.current = payload.sizeScale;
+          // Ctrl+колесо: CSS-размер корня не меняется, ResizeObserver молчит —
+          // без этого стекло остаётся прежнего размера
+          if (scaleChanged) {
+            requestAnimationFrame(() => pushBackdropShapes());
+          }
         }
       });
     } catch (err) {

@@ -142,6 +142,8 @@ export function copyScreenshotToClipboard(id: string): boolean {
     }
     const png = image.toPNG();
     lastImageHash = createHash('sha1').update(png).digest('hex');
+    // Свою же копию опрос не должен принять за новый скрин
+    lastFingerprint = imageFingerprint(image);
     clipboard.writeImage(image);
     return true;
   } catch (error) {
@@ -356,6 +358,32 @@ export function reorderScreenshots(orderedIds: string[]): boolean {
   }
 }
 
+/** Отпечаток последней картинки буфера: без него PNG кодировался каждые 700 мс */
+let lastFingerprint = '';
+
+/**
+ * Дешёвый отпечаток картинки без кодирования в PNG:
+ * размер и выборка байтов сырого растра.
+ */
+function imageFingerprint(image: Electron.NativeImage): string {
+  try {
+    const size = image.getSize();
+    const bitmap = image.toBitmap();
+    const step = Math.max(4, Math.floor(bitmap.length / 8192));
+    const hash = createHash('sha1');
+    hash.update(`${size.width}x${size.height}:${bitmap.length}`);
+    const sample = Buffer.alloc(Math.ceil(bitmap.length / step));
+    for (let i = 0, j = 0; i < bitmap.length; i += step, j += 1) {
+      sample[j] = bitmap[i];
+    }
+    hash.update(sample);
+    return hash.digest('hex');
+  } catch (error) {
+    console.error('imageFingerprint failed:', error);
+    return '';
+  }
+}
+
 /** Опрашивает буфер на новые изображения (Win+Shift+S и т.п.) */
 function pollClipboardImage(): void {
   try {
@@ -363,6 +391,12 @@ function pollClipboardImage(): void {
     if (image.isEmpty()) {
       return;
     }
+    // Та же картинка, что в прошлый раз: PNG не кодируем
+    const fingerprint = imageFingerprint(image);
+    if (fingerprint && fingerprint === lastFingerprint) {
+      return;
+    }
+    lastFingerprint = fingerprint;
     const png = image.toPNG();
     if (!png.length) {
       return;

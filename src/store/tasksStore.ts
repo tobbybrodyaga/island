@@ -207,10 +207,20 @@ export function useIslandStore(): UseIslandStoreResult {
     };
   }, []);
 
+  /** Что-то идёт: секундомер или Pomodoro — тогда время на экране меняется */
+  const hasRunning =
+    settings.pomodoroRunning ||
+    tasksState.tasks.some((task) => task.runningSince != null);
+
+  /**
+   * Тик часов. Каждый тик перерисовывает весь остров, поэтому
+   * часто — только пока идёт время, в простое — редко.
+   */
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 250);
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), hasRunning ? 500 : 2000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [hasRunning]);
 
   useEffect(() => {
     if (!hydrated.current || skipNextSave.current) {

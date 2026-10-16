@@ -1451,6 +1451,10 @@ ipcMain.on('island:backdrop-shapes', (_event, raw: unknown) => {
       }];
     });
     backdrop?.setState({ shapes, capsule: undefined });
+    // Отладка геометрии стекла: ISLAND_DEBUG_BACKDROP=1 npm run dev
+    if (process.env.ISLAND_DEBUG_BACKDROP) {
+      console.log('[debug] shapes', JSON.stringify(shapes), 'edge', currentEdge, 'bounds', JSON.stringify(mainWindow?.getBounds()));
+    }
   } catch (error) {
     console.error('backdrop-shapes failed:', error);
   }
