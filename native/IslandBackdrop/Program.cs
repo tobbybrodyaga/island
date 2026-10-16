@@ -251,6 +251,8 @@ internal sealed class BackdropWindow
     private CompositionColorBrush? _tintBrush;
     private CompositionBrush? _hostBrush;
     private readonly List<ShapeSlot> _slots = new();
+    /// <summary>Живое преломление поверх блюра; null — работает только блюр.</summary>
+    private LiveRefraction? _refraction;
 
     private bool _visible;
 
@@ -266,6 +268,46 @@ internal sealed class BackdropWindow
         CreateNativeWindow();
         EnableHostBackdrop(_hwnd);
         BuildComposition();
+        ExcludeFromCapture();
+        CreateRefraction();
+    }
+
+    /// <summary>
+    /// Слой стекла не попадает в захват экрана: иначе преломление видит само себя.
+    /// Окно Electron с текстом и значками остаётся видимым на скриншотах.
+    /// </summary>
+    private void ExcludeFromCapture()
+    {
+        try
+        {
+            if (!CaptureInterop.SetWindowDisplayAffinity(_hwnd, CaptureInterop.WDA_EXCLUDEFROMCAPTURE))
+            {
+                Log($"SetWindowDisplayAffinity failed: {Marshal.GetLastWin32Error()}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log($"exclude from capture failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Преломление поверх блюра. Не получилось — остаётся один блюр.</summary>
+    private void CreateRefraction()
+    {
+        try
+        {
+            if (_compositor == null || _root == null)
+            {
+                return;
+            }
+            _refraction = new LiveRefraction(_compositor);
+            _root.Children.InsertAtTop(_refraction.Visual);
+        }
+        catch (Exception ex)
+        {
+            Log($"refraction disabled: {ex}");
+            _refraction = null;
+        }
     }
 
     /// <summary>Читает stdin в фоне и постит команды в UI-поток.</summary>
@@ -313,6 +355,12 @@ internal sealed class BackdropWindow
             Name = "island-backdrop-stdin",
         };
         thread.Start();
+    }
+
+    /// <summary>Отладочный дамп слоя преломления (demo --dump).</summary>
+    public void DumpRefraction(string directory)
+    {
+        _refraction?.DumpTo(directory);
     }
 
     /// <summary>Кладёт команду напрямую (для demo-режима).</summary>
@@ -534,9 +582,12 @@ internal sealed class BackdropWindow
         switch ((cmd.Cmd ?? "show").ToLowerInvariant())
         {
             case "quit":
+                _refraction?.Dispose();
+                _refraction = null;
                 Native.DestroyWindow(_hwnd);
                 return;
             case "hide":
+                _refraction?.Pause();
                 if (_visible)
                 {
                     Native.ShowWindow(_hwnd, Native.SW_HIDE);
@@ -609,7 +660,15 @@ internal sealed class BackdropWindow
             tint.Brush = tintBrush;
             host.Children.InsertAtTop(blur);
             host.Children.InsertAtTop(tint);
-            _root.Children.InsertAtTop(host);
+            // Блюр всегда под слоем преломления
+            if (_refraction != null)
+            {
+                _root.Children.InsertBelow(host, _refraction.Visual);
+            }
+            else
+            {
+                _root.Children.InsertAtTop(host);
+            }
             _slots.Add(new ShapeSlot(host, geometry, tintBrush));
         }
 
@@ -623,6 +682,7 @@ internal sealed class BackdropWindow
 
         var alpha = (byte)Math.Round(Math.Clamp(cmd.Tint, 0, 1) * 255);
         var edge = (cmd.Edge ?? "free").ToLowerInvariant();
+        var glassShapes = new List<GlassShape>(items.Count);
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
@@ -660,9 +720,12 @@ internal sealed class BackdropWindow
             slot.Geometry.Size = size;
             slot.Geometry.CornerRadius = new Vector2(r, r);
             slot.Tint.Color = Color.FromArgb(alpha, 12, 12, 14);
+            // Та же геометрия для шейдера: плоская сторона уходит за край окна
+            glassShapes.Add(new GlassShape(localX + offset.X, localY + offset.Y, size.X, size.Y, r));
         }
 
         PlaceWindow(cmd.Owner, minX, minY, unionW, unionH);
+        _refraction?.Update(minX, minY, unionW, unionH, glassShapes, cmd.Tint);
     }
 
     private sealed class ShapeSlot
@@ -685,6 +748,7 @@ internal sealed class BackdropWindow
         var w = Math.Max(1, cmd.W);
         var h = Math.Max(1, cmd.H);
         var r = (float)Math.Max(0, Math.Min(cmd.R, Math.Min(w, h) / 2.0));
+        GlassShape? glass = null;
 
         if (_root != null && _geometry != null)
         {
@@ -715,6 +779,7 @@ internal sealed class BackdropWindow
             _geometry.Offset = offset;
             _geometry.Size = size;
             _geometry.CornerRadius = new Vector2(r, r);
+            glass = new GlassShape(offset.X, offset.Y, size.X, size.Y, r);
         }
 
         if (_tintBrush != null)
@@ -724,6 +789,10 @@ internal sealed class BackdropWindow
         }
 
         PlaceWindow(cmd.Owner, cmd.X, cmd.Y, w, h);
+        if (glass is { } shape)
+        {
+            _refraction?.Update(cmd.X, cmd.Y, w, h, new[] { shape }, cmd.Tint);
+        }
     }
 
     /// <summary>Ставит окно подложки под HWND острова.</summary>
@@ -795,8 +864,16 @@ internal static class Program
                     Tint = 0.22,
                 });
 
+                var dumpIndex = Array.IndexOf(args, "--dump");
+                var dumpDir = dumpIndex >= 0 && dumpIndex + 1 < args.Length ? args[dumpIndex + 1] : null;
+
                 var timer = new Thread(() =>
                 {
+                    if (dumpDir != null)
+                    {
+                        Thread.Sleep(TimeSpan.FromMilliseconds(2500));
+                        window.DumpRefraction(dumpDir);
+                    }
                     Thread.Sleep(TimeSpan.FromSeconds(seconds));
                     window.Enqueue(new BackdropCommand { Cmd = "quit" });
                 })
