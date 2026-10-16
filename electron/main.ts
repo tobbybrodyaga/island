@@ -7,13 +7,28 @@ import {
   nativeImage,
   powerMonitor,
   screen,
+  protocol,
   shell,
   Tray,
 } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { GlassBackdrop } from './glassBackdrop';
+import {
+  ensureIconFolders,
+  iconsRoot,
+  listIconFiles,
+  reconcileIconChoice,
+  registerIconProtocol,
+  watchIconFolders,
+} from './iconLibrary';
 import { appendCompletedTask, appendNote, ensureWorkbookExists, getWorkbookPath } from './excelJournal';
+import {
+  resolveStoredView,
+  normalizeViewMode,
+  type ViewMode,
+} from '../src/viewMode';
 import {
   clearClipboardHistory,
   getClipboardHistory,
@@ -75,6 +90,8 @@ const BASE = {
   peekTimer: { width: 66, height: 20 },
   cactus: { width: 72, height: 72 },
   expanded: { width: 560, height: 320 },
+  /** Общая высота компактных раскладок, чтобы остров не прыгал. */
+  compact: { width: 148, height: 20 },
 } as const;
 
 /** Свободный остров в режиме маски (кактус) */
@@ -109,17 +126,22 @@ const SIZE_SCALE_STEP = 0.08;
 interface PersistedAppState {
   tasks: unknown;
   settings: unknown;
+  /** Выбранный значок слота: builtin или имя файла в папке слота */
+  iconChoice?: Record<string, string>;
   window: {
     edge: EdgeOrFree;
     offset: number;
     x?: number;
     y?: number;
     compactView?: CompactView;
+    viewMode?: ViewMode;
     sizeScale?: number;
   };
 }
 
 let mainWindow: BrowserWindow | null = null;
+/** Подложка живого блюра. Создаётся вместе с окном острова. */
+let backdrop: GlassBackdrop | null = null;
 let tray: Tray | null = null;
 let currentMode: IslandMode = 'collapsed';
 let currentEdge: EdgeOrFree = 'top';
@@ -127,7 +149,9 @@ let edgeOffset = 0;
 let freeX = 0;
 let freeY = 0;
 let isDragging = false;
-let compactView: CompactView = 'info';
+let viewMode: ViewMode = { material: 'black', layout: 'minimal' };
+/** Клик раскрытия не должен тут же схлопнуться из-за blur на том же жесте. */
+let expandGuardUntil = 0;
 /** Масштаб острова (Ctrl + колесо) */
 let sizeScale = 1;
 let isQuitting = false;
@@ -163,8 +187,8 @@ function writeState(partial: Partial<PersistedAppState>): void {
         offset: edgeOffset,
         x: freeX,
         y: freeY,
-        compactView,
         sizeScale,
+        viewMode,
       },
     };
     const next: PersistedAppState = {
@@ -186,8 +210,8 @@ function writeState(partial: Partial<PersistedAppState>): void {
         offset: edgeOffset,
         x: freeX,
         y: freeY,
-        compactView,
         sizeScale,
+        viewMode,
       },
     };
     fs.writeFileSync(getStatePath(), JSON.stringify(next, null, 2), 'utf8');
@@ -403,67 +427,72 @@ function isNearTopCenter(bounds?: Electron.Rectangle | null): boolean {
 }
 
 /** Размер окна под режим и положение */
+/** Есть ли бегущий таймер: от этого зависит правый круг extended. */
+function compactHasTimer(): boolean {
+  try {
+    const state = readState();
+    const settings = state?.settings as StoredSettings | null | undefined;
+    if (settings?.pomodoroRunning) {
+      return true;
+    }
+    if (settings?.pomodoroPhase && settings.pomodoroPhase !== 'idle') {
+      return true;
+    }
+    const tasks = (state?.tasks as StoredTasksState | null | undefined)?.tasks;
+    return (
+      Array.isArray(tasks) &&
+      tasks.some((task) => task?.runningSince != null)
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveSize(
   mode: IslandMode,
   edge: EdgeOrFree,
-  view: CompactView,
   topCenter: boolean,
 ): { width: number; height: number } {
-  let base: { width: number; height: number } = BASE.pill;
   if (mode === 'expanded') {
-    base = BASE.expanded;
-  } else if (isMascotView(view) && edge === 'free') {
-    base = BASE.cactus;
-  } else if (view === 'glass') {
-    // Та же геометрия, что у тёмного peek info
-    base = BASE.peekInfo;
-  } else if (mode === 'peek') {
-    if (view === 'info') {
-      base = BASE.peekInfo;
-    } else if (view === 'timer') {
-      base = BASE.peekTimer;
-    } else {
-      base = BASE.pill;
-    }
-  } else if (view === 'timer') {
-    base = BASE.timer;
-  } else {
-    base = BASE.pill;
+    return {
+      width: Math.max(16, Math.round(BASE.expanded.width * sizeScale)),
+      height: Math.max(10, Math.round(BASE.expanded.height * sizeScale)),
+    };
   }
 
-  let width: number = base.width;
-  let height: number = base.height;
-
-  /** У верхнего центра — заметно вытянутее, как у Apple DI */
-  const isMascotFree =
-    isMascotView(view) && edge === 'free' && mode !== 'expanded';
-  if (
-    !isMascotFree &&
-    mode !== 'expanded' &&
-    topCenter &&
-    edge !== 'left' &&
-    edge !== 'right'
-  ) {
-    const stretch =
-      mode === 'peek' && view === 'info'
-        ? 1.38
-        : view === 'glass'
-          ? 1.38
-          : 1.28;
-    width = Math.round(width * stretch);
+  const cactus = viewMode.material === 'cactus' && edge === 'free';
+  if (cactus) {
+    return {
+      width: Math.max(16, Math.round(BASE.cactus.width * sizeScale)),
+      height: Math.max(10, Math.round(BASE.cactus.height * sizeScale)),
+    };
   }
 
-  width = Math.max(16, Math.round(width * sizeScale));
-  height = Math.max(10, Math.round(height * sizeScale));
+  let width: number = BASE.compact.width;
+  const height: number = BASE.compact.height;
+  if (viewMode.layout === 'minimal') {
+    width = BASE.pill.width;
+  } else if (viewMode.layout === 'extended') {
+    const circles = compactHasTimer() ? 2 : 1;
+    width = BASE.compact.width + 8 * circles + height * circles;
+  }
+
+  let nextWidth = width;
+  let nextHeight = height;
+  if (topCenter && edge !== 'left' && edge !== 'right' && viewMode.layout !== 'extended') {
+    nextWidth = Math.round(nextWidth * 1.38);
+  }
+
+  nextWidth = Math.max(16, Math.round(nextWidth * sizeScale));
+  nextHeight = Math.max(10, Math.round(nextHeight * sizeScale));
 
   if (
-    !isMascotFree &&
     (edge === 'left' || edge === 'right') &&
-    mode !== 'expanded'
+    viewMode.layout !== 'extended'
   ) {
-    return { width: height, height: width };
+    return { width: nextHeight, height: nextWidth };
   }
-  return { width, height };
+  return { width: nextWidth, height: nextHeight };
 }
 
 /** Применяет зум контента под текущий масштаб */
@@ -492,7 +521,7 @@ function emitEdge(): void {
   try {
     mainWindow?.webContents.send('island:edge-changed', {
       edge: currentEdge,
-      compactView,
+      viewMode,
       topCenter: isNearTopCenter(),
       sizeScale,
     });
@@ -811,21 +840,7 @@ function readPhysicalWindowSize(hwnd: number): { w: number; h: number } {
 }
 
 /**
- * Физический размер только из bounds×DPI.
- * GetClientRect через koffi иногда даёт 0 → пустой регион → окно исчезает.
- */
-function physicalBoundsSize(): { w: number; h: number } {
-  const bounds = mainWindow!.getBounds();
-  const display = screen.getDisplayMatching(bounds);
-  const scale = display.scaleFactor || 1;
-  return {
-    w: Math.max(1, Math.round(bounds.width * scale)),
-    h: Math.max(1, Math.round(bounds.height * scale)),
-  };
-}
-
-/**
- * Снимает клип окна (shape + Win32 region).
+ * Снимает shape/region окна.
  */
 function clearGlassWindowClip(): void {
   try {
@@ -852,95 +867,33 @@ function clearGlassWindowClip(): void {
 }
 
 /**
- * Клип Acrylic по капсуле: SetWindowRgn только на главный HWND.
- * Размер строго из bounds×DPI; при сомнении регион не ставим.
+ * Размер HWND только из bounds×DPI (GetClientRect через koffi бывает 0).
+ */
+function physicalBoundsSize(): { w: number; h: number } {
+  const bounds = mainWindow!.getBounds();
+  const display = screen.getDisplayMatching(bounds);
+  const scale = display.scaleFactor || 1;
+  return {
+    w: Math.max(1, Math.round(bounds.width * scale)),
+    h: Math.max(1, Math.round(bounds.height * scale)),
+  };
+}
+
+/**
+ * Клип HWND (setShape/SetWindowRgn) на этой связке Electron+Win11
+ * то делает окно невидимым, то не режет Acrylic. Отключён для стабильности.
  */
 function syncGlassWindowRegion(): void {
   try {
-    if (
-      process.platform !== 'win32' ||
-      !mainWindow ||
-      mainWindow.isDestroyed()
-    ) {
+    if (!mainWindow || mainWindow.isDestroyed()) {
       return;
     }
-
-    if (compactView !== 'glass') {
-      clearGlassWindowClip();
-      try {
-        mainWindow.setMinimumSize(1, 1);
-        mainWindow.setMaximumSize(4096, 4096);
-      } catch {
-        /* ignore */
-      }
-      return;
-    }
-
-    const bounds = mainWindow.getBounds();
-    if (bounds.width < 8 || bounds.height < 8) {
-      // Слишком рано / окно ещё не готово — не клипаем, иначе «пропадёт»
-      return;
-    }
-
-    const api = getWinClipApi();
-    const hwnd = getMainHwnd();
-    if (!api || hwnd == null) {
-      console.error('syncGlassWindowRegion: no api/hwnd');
-      return;
-    }
-
-    const { w: physW, h: physH } = physicalBoundsSize();
-    if (physW < 8 || physH < 8) {
-      return;
-    }
-
-    const display = screen.getDisplayMatching(bounds);
-    const scale = display.scaleFactor || 1;
-    const radiusPx = Math.max(
-      1,
-      Math.min(
-        Math.round(islandCornerRadiusDip() * scale),
-        Math.floor(physW / 2),
-        Math.floor(physH / 2),
-      ),
-    );
-
+    clearGlassWindowClip();
     try {
-      // Без setShape: он конфликтует с SetWindowRgn на части сборок
-      try {
-        mainWindow.setShape([]);
-      } catch {
-        /* ignore */
-      }
-
-      const clipRgn = createIslandRegion(api, physW, physH, radiusPx);
-      const ok = api.setWindowRgn(hwnd, clipRgn, 1);
-      if (!ok) {
-        console.error('SetWindowRgn failed', { physW, physH, radiusPx });
-        clearGlassWindowClip();
-        return;
-      }
-
-      // Страховка: если клип «съел» окно — откат
-      setTimeout(() => {
-        try {
-          if (!mainWindow || mainWindow.isDestroyed()) {
-            return;
-          }
-          const b = mainWindow.getBounds();
-          if (!mainWindow.isVisible() || b.width < 8 || b.height < 8) {
-            clearGlassWindowClip();
-            mainWindow.setOpacity(1);
-            mainWindow.show();
-            mainWindow.moveTop();
-          }
-        } catch (guardErr) {
-          console.error('glass clip guard failed:', guardErr);
-        }
-      }, 40);
-    } catch (rgnErr) {
-      console.error('SetWindowRgn threw:', rgnErr);
-      clearGlassWindowClip();
+      mainWindow.setMinimumSize(1, 1);
+      mainWindow.setMaximumSize(4096, 4096);
+    } catch {
+      /* ignore */
     }
   } catch (error) {
     console.error('syncGlassWindowRegion failed:', error);
@@ -948,7 +901,9 @@ function syncGlassWindowRegion(): void {
 }
 
 /**
- * Glass: Acrylic + безопасный клип капсулы.
+ * Glass: живая подложка IslandBackdrop.
+ * Успех enable — фон окна none, иначе прямоугольный Acrylic.
+ * Не glass — подложка скрыта, фон none.
  */
 function syncGlassMaterial(): void {
   try {
@@ -958,22 +913,27 @@ function syncGlassMaterial(): void {
     if (process.platform !== 'win32') {
       return;
     }
-    const useGlass = compactView === 'glass';
+    const glass = viewMode.material === 'artic';
+    const expanded = currentMode === 'expanded';
     try {
-      mainWindow.setBackgroundMaterial(useGlass ? 'acrylic' : 'none');
+      if (glass && backdrop?.enable({ edge: currentEdge, expanded })) {
+        mainWindow.setBackgroundMaterial('none');
+      } else if (glass) {
+        mainWindow.setBackgroundMaterial('acrylic');
+      } else {
+        backdrop?.disable();
+        mainWindow.setBackgroundMaterial('none');
+      }
     } catch (matErr) {
       console.error('setBackgroundMaterial failed:', matErr);
     }
     syncGlassWindowRegion();
-    if (useGlass) {
-      setTimeout(() => syncGlassWindowRegion(), 50);
-      setTimeout(() => syncGlassWindowRegion(), 180);
-    }
     try {
       mainWindow.setOpacity(1);
       if (!mainWindow.isVisible()) {
         mainWindow.show();
       }
+      mainWindow.moveTop();
     } catch {
       /* ignore */
     }
@@ -1105,7 +1065,7 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
       height: BASE.pill.height,
     } as Electron.Rectangle);
   const topCenter = isNearTopCenter(start);
-  const size = resolveSize(mode, currentEdge, compactView, topCenter);
+  const size = resolveSize(mode, currentEdge, topCenter);
 
   let next: Electron.Rectangle;
   if (currentEdge === 'top') {
@@ -1167,10 +1127,16 @@ function applyLayout(mode: IslandMode): void {
   freeX = target.x;
   freeY = target.y;
   mainWindow.setBounds(target, false);
+  try {
+    backdrop?.setState({ expanded: mode === 'expanded', edge: currentEdge });
+    backdrop?.push();
+  } catch (error) {
+    console.error('backdrop layout push failed:', error);
+  }
   emitEdge();
   syncGlassMaterial();
   // После setBounds клиентский rect мог обновиться — клип ещё раз
-  if (compactView === 'glass') {
+  if (viewMode.material === 'artic') {
     setTimeout(() => syncGlassWindowRegion(), 0);
   }
 }
@@ -1182,8 +1148,13 @@ function snapIfNearEdge(): void {
   }
 
   /** Кактус не прилипает к краям, иначе схлопывается */
-  if (isMascotView(compactView)) {
+  if (viewMode.material === 'cactus') {
     currentEdge = 'free';
+    try {
+      backdrop?.setState({ edge: 'free' });
+    } catch (error) {
+      console.error('backdrop unsnap failed:', error);
+    }
     applyLayout(currentMode);
     writeState({});
     return;
@@ -1199,6 +1170,11 @@ function snapIfNearEdge(): void {
 
   if (minDist > SNAP_THRESHOLD) {
     currentEdge = 'free';
+    try {
+      backdrop?.setState({ edge: 'free' });
+    } catch (error) {
+      console.error('backdrop unsnap failed:', error);
+    }
     applyLayout(currentMode);
     writeState({});
     return;
@@ -1225,6 +1201,11 @@ function snapIfNearEdge(): void {
 
   currentEdge = edge;
   edgeOffset = offset;
+  try {
+    backdrop?.setState({ edge });
+  } catch (error) {
+    console.error('backdrop snap failed:', error);
+  }
   applyLayout(currentMode);
   writeState({});
 }
@@ -1370,6 +1351,17 @@ function createTray(): void {
           click: () => showIsland(),
         },
         {
+          label: 'Открыть папку иконок',
+          click: () => {
+            try {
+              ensureIconFolders();
+              void shell.openPath(iconsRoot());
+            } catch (error) {
+              console.error(error);
+            }
+          },
+        },
+        {
           label: 'Открыть Задачник',
           click: async () => {
             try {
@@ -1407,7 +1399,7 @@ function createWindow(): void {
   const primary = screen.getPrimaryDisplay().workArea;
 
   if (saved?.window) {
-    compactView = normalizeCompactView(saved.window.compactView);
+    viewMode = resolveStoredView(saved.window);
     sizeScale = clamp(
       saved.window.sizeScale ?? 1,
       SIZE_SCALE_MIN,
@@ -1418,8 +1410,8 @@ function createWindow(): void {
   /** Холодный старт: всегда капсула у верхнего центра, иначе легко «потерять» остров */
   currentEdge = 'top';
   edgeOffset = 0;
-  if (isMascotView(compactView)) {
-    compactView = 'info';
+  if (viewMode.material === 'cactus') {
+    currentEdge = 'free';
   }
   freeX = primary.x + Math.round(primary.width / 2) - 36;
   freeY = primary.y;
@@ -1427,7 +1419,7 @@ function createWindow(): void {
   const initial = clampToWorkArea({
     x: freeX,
     y: freeY,
-    ...resolveSize('collapsed', currentEdge, compactView, true),
+    ...resolveSize('collapsed', currentEdge, true),
   });
 
   mainWindow = new BrowserWindow({
@@ -1461,6 +1453,12 @@ function createWindow(): void {
   mainWindow.setAlwaysOnTop(true, 'screen-saver');
   mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   mainWindow.setMenuBarVisibility(false);
+  try {
+    backdrop = new GlassBackdrop(mainWindow);
+  } catch (error) {
+    console.error('GlassBackdrop init failed:', error);
+    backdrop = null;
+  }
   // Иначе Windows раздувает крошечное окно → «полка» снизу у glass
   try {
     mainWindow.setMinimumSize(1, 1);
@@ -1470,12 +1468,12 @@ function createWindow(): void {
 
   // Держим клип капсулы после move/resize (DWM/Electron могут сбросить регион)
   mainWindow.on('move', () => {
-    if (compactView === 'glass') {
+    if (viewMode.material === 'artic') {
       syncGlassWindowRegion();
     }
   });
   mainWindow.on('resize', () => {
-    if (compactView === 'glass') {
+    if (viewMode.material === 'artic') {
       syncGlassWindowRegion();
     }
   });
@@ -1491,8 +1489,8 @@ function createWindow(): void {
     try {
       currentEdge = 'top';
       edgeOffset = 0;
-      if (isMascotView(compactView)) {
-        compactView = 'info';
+      if (viewMode.material === 'cactus') {
+        currentEdge = 'free';
       }
       // Снять возможный «пустой» регион от прошлых экспериментов
       syncGlassWindowRegion();
@@ -1503,6 +1501,7 @@ function createWindow(): void {
       mainWindow?.setAlwaysOnTop(true, 'screen-saver');
       mainWindow?.moveTop();
       writeState({});
+      publishIcons();
     } catch (error) {
       console.error('ready-to-show failed:', error);
     }
@@ -1539,6 +1538,9 @@ function createWindow(): void {
 
   mainWindow.on('blur', () => {
     try {
+      if (Date.now() < expandGuardUntil) {
+        return;
+      }
       if (currentMode === 'expanded' || currentMode === 'peek') {
         mainWindow?.webContents.send('island:collapse');
       }
@@ -1560,6 +1562,19 @@ function createWindow(): void {
   });
 }
 
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'island-icon',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
+
 app.commandLine.appendSwitch('enable-transparent-visuals');
 
 app.whenReady().then(() => {
@@ -1568,6 +1583,13 @@ app.whenReady().then(() => {
   }
 
   createTray();
+  try {
+    ensureIconFolders();
+    registerIconProtocol();
+    watchIconFolders(() => publishIcons());
+  } catch (error) {
+    console.error('icon library start failed:', error);
+  }
   createWindow();
   startClipboardWatch();
   startScreenshotWatch();
@@ -1665,6 +1687,155 @@ app.on('window-all-closed', () => {
   }
 });
 
+/** Текущий выбор значков из state, без остальных полей */
+function readIconChoice(): Record<string, string> {
+  try {
+    const raw = readState()?.iconChoice;
+    if (!raw || typeof raw !== 'object') {
+      return {};
+    }
+    const out: Record<string, string> = {};
+    for (const [key, value] of Object.entries(raw)) {
+      if (typeof value === 'string') {
+        out[key] = value;
+      }
+    }
+    return out;
+  } catch (error) {
+    console.error('readIconChoice failed:', error);
+    return {};
+  }
+}
+
+/** Список файлов и выбор. Пропавший файл откатывается на builtin. */
+function publishIcons(): void {
+  try {
+    const files = listIconFiles();
+    const fixed = reconcileIconChoice(readIconChoice(), files);
+    if (fixed.changed) {
+      writeState({ iconChoice: fixed.choice });
+    }
+    mainWindow?.webContents.send('island:icons-changed', {
+      files,
+      choice: fixed.choice,
+    });
+  } catch (error) {
+    console.error('publishIcons failed:', error);
+  }
+}
+
+ipcMain.handle('island:get-icons', () => {
+  try {
+    const files = listIconFiles();
+    const fixed = reconcileIconChoice(readIconChoice(), files);
+    if (fixed.changed) {
+      writeState({ iconChoice: fixed.choice });
+    }
+    return { ok: true, files, choice: fixed.choice };
+  } catch (error) {
+    console.error('get-icons failed:', error);
+    return { ok: false, files: {}, choice: {} };
+  }
+});
+
+ipcMain.handle('island:set-icon-choice', (_event, slot: unknown, id: unknown) => {
+  try {
+    if (typeof slot !== 'string' || typeof id !== 'string') {
+      return { ok: false };
+    }
+    const files = listIconFiles();
+    const known = id === 'builtin' || (files[slot] ?? []).some((file) => file.id === id);
+    if (!known) {
+      return { ok: false };
+    }
+    const next = { ...readIconChoice(), [slot]: id };
+    writeState({ iconChoice: next });
+    publishIcons();
+    return { ok: true, choice: next };
+  } catch (error) {
+    console.error('set-icon-choice failed:', error);
+    return { ok: false };
+  }
+});
+
+ipcMain.handle('island:open-icons-folder', () => {
+  try {
+    ensureIconFolders();
+    void shell.openPath(iconsRoot());
+    return { ok: true };
+  } catch (error) {
+    console.error('open-icons-folder failed:', error);
+    return { ok: false };
+  }
+});
+
+/** Несколько фигур разворота в DIP относительно окна */
+ipcMain.on('island:backdrop-shapes', (_event, raw: unknown) => {
+  try {
+    if (!Array.isArray(raw)) {
+      return;
+    }
+    const shapes = raw.flatMap((item) => {
+      if (!item || typeof item !== 'object') {
+        return [];
+      }
+      const shape = item as {
+        x?: unknown;
+        y?: unknown;
+        width?: unknown;
+        height?: unknown;
+        radius?: unknown;
+      };
+      const nums = [shape.x, shape.y, shape.width, shape.height, shape.radius];
+      if (!nums.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+        return [];
+      }
+      return [{
+        x: shape.x as number,
+        y: shape.y as number,
+        width: shape.width as number,
+        height: shape.height as number,
+        radius: Math.max(0, shape.radius as number),
+      }];
+    });
+    backdrop?.setState({ shapes, capsule: undefined });
+  } catch (error) {
+    console.error('backdrop-shapes failed:', error);
+  }
+});
+
+/** Геометрия капсулы из рендерера: прямоугольник и радиус в DIP */
+ipcMain.on('island:capsule-rect', (_event, raw: unknown) => {
+  try {
+    if (!raw || typeof raw !== 'object') {
+      return;
+    }
+    const rect = raw as {
+      x?: unknown;
+      y?: unknown;
+      width?: unknown;
+      height?: unknown;
+      radius?: unknown;
+    };
+    const nums = [rect.x, rect.y, rect.width, rect.height, rect.radius];
+    if (!nums.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+      return;
+    }
+    backdrop?.setState({
+      shapes: undefined,
+      capsule: {
+        x: rect.x as number,
+        y: rect.y as number,
+        width: rect.width as number,
+        height: rect.height as number,
+      },
+      radius: Math.max(0, rect.radius as number),
+    });
+  } catch (error) {
+    console.error('capsule-rect failed:', error);
+  }
+});
+
 ipcMain.handle('island:set-mode', (_event, mode: IslandMode) => {
   try {
     if (!mainWindow || !['collapsed', 'peek', 'expanded'].includes(mode)) {
@@ -1672,23 +1843,25 @@ ipcMain.handle('island:set-mode', (_event, mode: IslandMode) => {
     }
     applyLayout(mode);
     if (mode === 'expanded') {
+      expandGuardUntil = Date.now() + 500;
       mainWindow.focus();
     }
-    return { ok: true, mode, edge: currentEdge, compactView };
+    return { ok: true, mode, edge: currentEdge, viewMode };
   } catch (error) {
     console.error('set-mode failed:', error);
     return { ok: false };
   }
 });
 
-ipcMain.handle('island:set-compact-view', (_event, view: CompactView) => {
+ipcMain.handle('island:set-view-mode', (_event, raw: unknown) => {
   try {
-    if (!['info', 'timer', 'minimal', 'glass', 'cactus', 'moon'].includes(view)) {
+    const next = normalizeViewMode(raw);
+    if (!next) {
       return { ok: false };
     }
-    compactView = normalizeCompactView(view);
-    /** Маски живут только в свободном полёте */
-    if (isMascotView(view)) {
+    viewMode = next;
+    /** Кактус только в свободном полёте */
+    if (viewMode.material === 'cactus') {
       currentEdge = 'free';
     }
     applyZoomFactor();
@@ -1700,9 +1873,9 @@ ipcMain.handle('island:set-compact-view', (_event, view: CompactView) => {
     }
     writeState({});
     syncGlassMaterial();
-    return { ok: true, compactView, edge: currentEdge, sizeScale };
+    return { ok: true, viewMode, edge: currentEdge, sizeScale };
   } catch (error) {
-    console.error('set-compact-view failed:', error);
+    console.error('set-view-mode failed:', error);
     return { ok: false };
   }
 });
@@ -1830,6 +2003,12 @@ ipcMain.handle('island:drag-move', (_event, dx: number, dy: number) => {
     } else {
       mainWindow.setBounds(next, false);
     }
+    try {
+      backdrop?.setState({ edge: 'free' });
+      backdrop?.push();
+    } catch (error) {
+      console.error('backdrop drag push failed:', error);
+    }
     return { ok: true };
   } catch (error) {
     console.error('drag-move failed:', error);
@@ -1853,7 +2032,7 @@ ipcMain.handle('island:load-state', () => {
       ok: true,
       state: readState(),
       edge: currentEdge,
-      compactView,
+      viewMode,
       sizeScale,
       workbookPath: getWorkbookPath(),
     };

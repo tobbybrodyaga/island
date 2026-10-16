@@ -269,54 +269,23 @@ html.glass-mode .app-root {
 
 .glass-edge,
 .glass-sheen,
-.glass-chroma {
+.glass-chroma,
+.glass-frost {
   display: none !important;
 }
 
-/* Frost-снимок рабочего стола: строго внутри border-radius капсулы/панели */
-.island--glass .glass-frost {
-  display: block !important;
-  position: absolute;
-  inset: -50%;
-  z-index: 0;
-  border-radius: 0;
-  background-color: #2a2a2e;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: cover;
-  filter: blur(28px) saturate(1.15) brightness(0.85);
-  transform: scale(1.2);
-  pointer-events: none;
-  opacity: 1;
-}
-
-/* Пока снимок не готов — имитация мути, не «голое» стекло */
-.island--glass .glass-frost--pending {
-  background-image: linear-gradient(
-    145deg,
-    rgba(80, 80, 88, 0.95),
-    rgba(28, 28, 32, 0.98) 55%,
-    rgba(40, 44, 52, 0.95)
-  );
-  filter: blur(12px) saturate(1.05);
-}
-
+/* Капсула прозрачная: тинт рисует IslandBackdrop, здесь только текст и иконки */
 .glass-body {
   position: absolute;
   inset: 0;
   z-index: 1;
-  /* Лёгкий тинт поверх Acrylic / frost, чтобы просвечивал блюр */
-  background: rgba(12, 12, 14, 0.22);
+  background: transparent;
   border-radius: inherit;
   pointer-events: none;
 }
 
 .island--glass.island--glass-moving:not(.island--expanded) {
-  background: rgba(12, 12, 14, 0.45) !important;
-}
-
-.island--glass.island--glass-moving .glass-frost {
-  opacity: 0.35;
+  background: transparent !important;
 }
 
 
@@ -355,8 +324,159 @@ html.glass-mode .app-root {
   display: flex;
   flex-direction: column;
   padding: 0;
-  background: #1c1c1e;
+  background: #000;
   box-shadow: none;
+}
+
+/* Три отдельные фигуры разворота. Зазор прозрачный, клики в нём проходят дальше. */
+.island.island--live {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.live-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+.live-shape {
+  position: relative;
+  height: 100%;
+  background: #000;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.island--material-black .live-shape,
+.island--material-cactus .live-shape {
+  background: #000;
+  color: #fff;
+}
+
+.island--material-artic .live-shape,
+.island--glass .live-shape {
+  background: transparent;
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+}
+
+.island--material-artic .live-shape::before,
+.island--material-artic:not(.island--live):not(.island--expanded)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 46%);
+}
+
+.island--material-black:not(.island--expanded):not(.island--live) {
+  background: #000;
+}
+
+.island--material-artic.island--expanded {
+  background: transparent !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
+.pill-time--hero {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pill-caption {
+  margin-left: 6px;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.pill-activity--task {
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.task-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #8e8e93;
+  flex-shrink: 0;
+}
+
+.task-dot--on {
+  background: #30d158;
+  box-shadow: 0 0 6px rgba(48, 209, 88, 0.65);
+}
+
+.live-shape--circle {
+  aspect-ratio: 1;
+  height: 100%;
+  width: auto;
+  border-radius: 999px;
+}
+
+.live-shape--pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-radius: 999px;
+  padding: 0;
+}
+
+.island--edge-top .live-shape {
+  border-radius: 0 0 10px 10px;
+}
+
+.island--edge-bottom .live-shape {
+  border-radius: 10px 10px 0 0;
+}
+
+.island--edge-left .live-shape {
+  border-radius: 0 10px 10px 0;
+}
+
+.island--edge-right .live-shape {
+  border-radius: 10px 0 0 10px;
+}
+
+.live-icon,
+.live-icon.icon-mask,
+.live-icon.icon-png,
+.live-shape .icon-mask {
+  width: 22px;
+  height: 22px;
+}
+
+.live-ring {
+  width: 78%;
+  height: 78%;
+  transform: rotate(-90deg);
+}
+
+.live-ring-track,
+.live-ring-value {
+  fill: none;
+  stroke-width: 3;
+}
+
+.live-ring-track {
+  stroke: rgba(255, 255, 255, 0.18);
+}
+
+.live-ring-value {
+  stroke: var(--accent);
+  stroke-linecap: round;
 }
 
 /* Развёрнутая glass: frost + те же радиусы, что у обычной панели */
@@ -660,6 +780,52 @@ html.glass-mode .app-root {
   height: 20px;
   display: block;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.35));
+}
+
+/* Свой SVG красится в currentColor, PNG остаётся как в файле */
+.icon-mask {
+  display: block;
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.rail-btn .icon-mask,
+.rail-slot-icon.icon-mask {
+  width: 20px;
+  height: 20px;
+}
+
+.pill-icon.icon-mask {
+  width: 10px;
+  height: 10px;
+}
+
+.icon-png {
+  display: block;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.rail-btn .icon-png,
+.rail-slot-icon.icon-png {
+  width: 20px;
+  height: 20px;
+}
+
+.pill-icon.icon-png {
+  width: 10px;
+  height: 10px;
+}
+
+.pill-cactus-svg.icon-mask,
+.pill-cactus-svg.icon-png {
+  width: 92%;
+  height: 92%;
 }
 
 /* Чёрный PNG-силуэт под цвет рейки */

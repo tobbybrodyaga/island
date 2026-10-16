@@ -44,6 +44,12 @@
       "package.json"
     ],
     "asar": true,
+    "extraResources": [
+      {
+        "from": "native/backdrop",
+        "to": "backdrop"
+      }
+    ],
     "win": {
       "target": [
         {

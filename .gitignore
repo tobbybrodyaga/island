@@ -5,3 +5,5 @@ dist-electron
 .DS_Store
 release
 *.xlsx
+native/IslandBackdrop/bin
+native/IslandBackdrop/obj

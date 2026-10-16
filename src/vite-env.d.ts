@@ -1,5 +1,7 @@
 export {};
 
+import type { ViewMode } from './viewMode';
+
 type IslandMode = 'collapsed' | 'peek' | 'expanded';
 type CompactView = 'info' | 'timer' | 'minimal' | 'glass' | 'cactus';
 type EdgeOrFree = 'top' | 'bottom' | 'left' | 'right' | 'free';
@@ -28,11 +30,11 @@ interface IslandApi {
     ok: boolean;
     mode?: IslandMode;
     edge?: EdgeOrFree;
-    compactView?: CompactView;
+    viewMode?: ViewMode;
   }>;
-  setCompactView: (
-    view: CompactView,
-  ) => Promise<{ ok: boolean; compactView?: CompactView; edge?: EdgeOrFree }>;
+  setViewMode: (
+    mode: ViewMode,
+  ) => Promise<{ ok: boolean; viewMode?: ViewMode; edge?: EdgeOrFree; sizeScale?: number }>;
   adjustSizeScale: (
     delta: number,
   ) => Promise<{ ok: boolean; sizeScale?: number }>;
@@ -82,10 +84,12 @@ interface IslandApi {
         edge: string;
         offset: number;
         compactView?: CompactView;
+        viewMode?: ViewMode;
         sizeScale?: number;
       };
     } | null;
     edge?: EdgeOrFree;
+    viewMode?: ViewMode;
     compactView?: CompactView;
     sizeScale?: number;
     workbookPath?: string;
@@ -121,10 +125,36 @@ interface IslandApi {
   ) => Promise<{ ok: boolean; dataUrl: string | null }>;
   copyScreenshot: (id: string) => Promise<{ ok: boolean }>;
   startScreenshotDrag: (id: string) => void;
+  sendCapsuleRect: (rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    radius: number;
+  }) => void;
+  sendBackdropShapes: (
+    shapes: { x: number; y: number; width: number; height: number; radius: number }[],
+  ) => void;
+  getIcons: () => Promise<{
+    ok: boolean;
+    files: Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
+    choice: Record<string, string>;
+  }>;
+  setIconChoice: (
+    slot: string,
+    id: string,
+  ) => Promise<{ ok: boolean; choice?: Record<string, string> }>;
+  openIconsFolder: () => Promise<{ ok: boolean }>;
+  onIconsChanged: (
+    handler: (payload: {
+      files: Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
+      choice: Record<string, string>;
+    }) => void,
+  ) => () => void;
   onEdgeChanged: (
     handler: (payload: {
       edge: EdgeOrFree;
-      compactView: CompactView;
+      viewMode: ViewMode;
       topCenter?: boolean;
       sizeScale?: number;
     }) => void,

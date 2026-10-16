@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { ViewMode } from '../src/viewMode';
 
 export type IslandMode = 'collapsed' | 'peek' | 'expanded';
 export type CompactView = 'info' | 'timer' | 'minimal' | 'glass' | 'cactus';
@@ -23,8 +24,8 @@ export interface QuickPathDto {
 
 const islandApi = {
   setMode: (mode: IslandMode) => ipcRenderer.invoke('island:set-mode', mode),
-  setCompactView: (view: CompactView) =>
-    ipcRenderer.invoke('island:set-compact-view', view),
+  setViewMode: (mode: ViewMode) =>
+    ipcRenderer.invoke('island:set-view-mode', mode),
   adjustSizeScale: (delta: number) =>
     ipcRenderer.invoke('island:adjust-size-scale', delta),
   setSizeScale: (scale: number) =>
@@ -123,10 +124,55 @@ const islandApi = {
     ipcRenderer.send('island:drag-screenshot', id);
   },
 
+  /** Прямоугольник и радиус основы капсулы в DIP */
+  sendCapsuleRect: (rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    radius: number;
+  }) => {
+    ipcRenderer.send('island:capsule-rect', rect);
+  },
+  sendBackdropShapes: (
+    shapes: { x: number; y: number; width: number; height: number; radius: number }[],
+  ) => {
+    ipcRenderer.send('island:backdrop-shapes', shapes);
+  },
+
+  getIcons: () =>
+    ipcRenderer.invoke('island:get-icons') as Promise<{
+      ok: boolean;
+      files: Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
+      choice: Record<string, string>;
+    }>,
+  setIconChoice: (slot: string, id: string) =>
+    ipcRenderer.invoke('island:set-icon-choice', slot, id) as Promise<{
+      ok: boolean;
+      choice?: Record<string, string>;
+    }>,
+  openIconsFolder: () => ipcRenderer.invoke('island:open-icons-folder'),
+  onIconsChanged: (
+    handler: (payload: {
+      files: Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
+      choice: Record<string, string>;
+    }) => void,
+  ) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: {
+        files: Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
+        choice: Record<string, string>;
+      },
+    ) => handler(payload);
+    ipcRenderer.on('island:icons-changed', listener);
+    return () => ipcRenderer.removeListener('island:icons-changed', listener);
+  },
+
   onEdgeChanged: (
     handler: (payload: {
       edge: EdgeOrFree;
-      compactView: CompactView;
+      viewMode: ViewMode;
       topCenter?: boolean;
       sizeScale?: number;
     }) => void,
@@ -135,7 +181,7 @@ const islandApi = {
       _event: IpcRendererEvent,
       payload: {
         edge: EdgeOrFree;
-        compactView: CompactView;
+        viewMode: ViewMode;
         topCenter?: boolean;
         sizeScale?: number;
       },
