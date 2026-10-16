@@ -434,6 +434,12 @@ float4 PS(VSOut i) : SV_Target
         var refraction = clear
             ? Math.Clamp(minDim * 0.55f, 6f, 40f)
             : Math.Clamp(minDim * 0.35f, 4f, 30f);
+        // Прозрачная панель: преломление мягче, чтобы рейка у края не двоилась в стекле
+        if (clear && minDim > 160f)
+        {
+            bezel = 16f;
+            refraction = 20f;
+        }
         var specular = clear ? 1.5f : 0.9f;
         var chroma = clear ? 0.06f : 0f;
         p.Optics = new Vector4(count, refraction, bezel, (float)Math.Clamp(tint, 0, 1));

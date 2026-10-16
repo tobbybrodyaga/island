@@ -569,8 +569,8 @@ function syncGlassMaterial(): void {
     }
     const glass = isGlassMaterial(viewMode.material);
     const expanded = currentMode === 'expanded';
-    // Прозрачное стекло только в компакте: панель с текстом всегда матовая
-    const clear = viewMode.material === 'clear' && !expanded;
+    // Прозрачное стекло и в компакте, и в панели (читаемость держат плашки в CSS)
+    const clear = viewMode.material === 'clear';
     try {
       if (glass && backdrop?.enable({ edge: currentEdge, expanded, clear })) {
         mainWindow.setBackgroundMaterial('none');
@@ -787,7 +787,7 @@ function applyLayout(mode: IslandMode): void {
     backdrop?.setState({
       expanded: mode === 'expanded',
       edge: currentEdge,
-      clear: viewMode.material === 'clear' && mode !== 'expanded',
+      clear: viewMode.material === 'clear',
     });
     backdrop?.push();
   } catch (error) {
@@ -1493,12 +1493,15 @@ ipcMain.handle('island:set-mode', (_event, mode: IslandMode) => {
     if (!mainWindow || !['collapsed', 'peek', 'expanded'].includes(mode)) {
       return { ok: false };
     }
+    // Окно до и после: рендерер морфит форму из старого прямоугольника в новый
+    const from = mainWindow.getBounds();
     applyLayout(mode);
+    const to = mainWindow.getBounds();
     if (mode === 'expanded') {
       expandGuardUntil = Date.now() + 500;
       mainWindow.focus();
     }
-    return { ok: true, mode, edge: currentEdge, viewMode };
+    return { ok: true, mode, edge: currentEdge, viewMode, from, to };
   } catch (error) {
     console.error('set-mode failed:', error);
     return { ok: false };

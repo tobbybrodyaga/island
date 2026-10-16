@@ -31,6 +31,9 @@ interface IslandApi {
     mode?: IslandMode;
     edge?: EdgeOrFree;
     viewMode?: ViewMode;
+    /** Прямоугольник окна до и после смены режима, DIP */
+    from?: { x: number; y: number; width: number; height: number };
+    to?: { x: number; y: number; width: number; height: number };
   }>;
   setViewMode: (
     mode: ViewMode,

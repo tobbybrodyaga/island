@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { AnimatePresence, animate, motion, useMotionValue } from 'framer-motion';
 import {
   formatDuration,
   getTaskElapsedMs,
@@ -53,6 +53,11 @@ const CLICK_MAX_MS = 300;
 /** Сколько гонять геометрию подложки по кадрам после смены режима */
 const BACKDROP_FOLLOW_MS = 400;
 const DEFAULT_VIEW: ViewMode = { material: 'black', layout: 'minimal' };
+
+/** Пружины Glass-HQ (core/spring.ts): одна «материя» для всех движений стекла */
+const SPRING_MORPH = { type: 'spring', duration: 0.42, bounce: 0.18 } as const;
+const SPRING_COLLAPSE = { type: 'spring', duration: 0.34, bounce: 0 } as const;
+const SPRING_LAYOUT = { type: 'spring', duration: 0.4, bounce: 0.16 } as const;
 
 /** Плотные заполненные иконки в духе классических SF Symbols */
 const PANEL_TABS: { id: PanelTab; label: string; icon: ReactNode }[] = [
@@ -423,6 +428,20 @@ export function IslandShell(props: IslandShellProps) {
   viewModeRef.current = viewMode;
   /** Зум окна (Ctrl+колесо): CSS-пиксели × sizeScale = DIP */
   const sizeScaleRef = useRef(1);
+  const edgeRef = useRef(edge);
+  edgeRef.current = edge;
+  /** Прогресс морфа: 0 — капсула, 1 — панель */
+  const morphProgress = useMotionValue(1);
+  /** Откуда растёт панель: прямоугольник компакта в CSS-пикселях нового окна */
+  const morphFromRef = useRef<{ x: number; y: number; w: number; h: number; r: number } | null>(
+    null,
+  );
+  /** Идёт морф: клип и фигура подложки считаются из прогресса, а не из DOM */
+  const morphActiveRef = useRef(false);
+  const morphBusyRef = useRef(false);
+  /** Режим, уже отправленный в main: эффект не шлёт его второй раз */
+  const sentModeRef = useRef<IslandMode | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const iconFilesRef = useRef(iconFiles);
   iconFilesRef.current = iconFiles;
   const iconChoiceRef = useRef(iconChoice);
@@ -455,6 +474,10 @@ export function IslandShell(props: IslandShellProps) {
    */
   const pushBackdropShapes = useCallback(() => {
     try {
+      if (morphActiveRef.current) {
+        applyMorph(morphProgress.get());
+        return;
+      }
       if (!isGlassMaterial(viewModeRef.current.material)) {
         return;
       }
@@ -536,8 +559,75 @@ export function IslandShell(props: IslandShellProps) {
   }, []);
 
   useEffect(() => {
+    // Раскрытие и сворачивание с морфом сами шлют режим в main
+    if (sentModeRef.current === mode) {
+      return;
+    }
+    sentModeRef.current = mode;
     void syncWindowMode(mode);
   }, [mode, syncWindowMode]);
+
+  /**
+   * Форма в момент t морфа: клип корня, прозрачность панели и фигура подложки.
+   * t = 0 — прямоугольник капсулы внутри большого окна, t = 1 — всё окно.
+   */
+  function applyMorph(t: number) {
+    try {
+      const root = shellRef.current;
+      const from = morphFromRef.current;
+      if (!root || !from) {
+        return;
+      }
+      const W = root.clientWidth || window.innerWidth;
+      const H = root.clientHeight || window.innerHeight;
+      const k = Math.max(0, Math.min(1, t));
+      const x = from.x * (1 - k);
+      const y = from.y * (1 - k);
+      const w = from.w + (W - from.w) * k;
+      const h = from.h + (H - from.h) * k;
+      const edgeNow = edgeRef.current;
+      const panelRadius = edgeNow === 'free' ? 24 : 22;
+      const r = Math.min(from.r + (panelRadius - from.r) * k, Math.min(w, h) / 2);
+      // Плоская сторона к краю экрана — как у капсулы и панели в CSS
+      const tl = edgeNow === 'top' || edgeNow === 'left' ? 0 : r;
+      const tr = edgeNow === 'top' || edgeNow === 'right' ? 0 : r;
+      const br = edgeNow === 'bottom' || edgeNow === 'right' ? 0 : r;
+      const bl = edgeNow === 'bottom' || edgeNow === 'left' ? 0 : r;
+      root.style.clipPath = `inset(${y}px ${W - x - w}px ${H - y - h}px ${x}px round ${tl}px ${tr}px ${br}px ${bl}px)`;
+      if (panelRef.current) {
+        panelRef.current.style.opacity = String(Math.max(0, Math.min(1, (k - 0.4) / 0.6)));
+      }
+      if (isGlassMaterial(viewModeRef.current.material) && window.island?.sendBackdropShapes) {
+        const zoom = sizeScaleRef.current || 1;
+        window.island.sendBackdropShapes([
+          { x: x * zoom, y: y * zoom, width: w * zoom, height: h * zoom, radius: r * zoom },
+        ]);
+      }
+    } catch (err) {
+      console.error('applyMorph failed:', err);
+    }
+  }
+
+  /** Конец морфа: клип снят, форма снова целиком из CSS */
+  function clearMorph() {
+    morphActiveRef.current = false;
+    if (shellRef.current) {
+      shellRef.current.style.clipPath = '';
+    }
+    if (panelRef.current) {
+      panelRef.current.style.opacity = '';
+    }
+  }
+
+  /** Каждый кадр пружины — новая форма */
+  useEffect(() => {
+    return morphProgress.on('change', (value) => {
+      if (morphActiveRef.current) {
+        applyMorph(value);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- applyMorph читает только ref
+  }, [morphProgress]);
 
   useEffect(() => {
     try {
@@ -570,7 +660,7 @@ export function IslandShell(props: IslandShellProps) {
       }
       return window.island.onCollapseRequest(() => {
         if (modeRef.current !== 'collapsed') {
-          setMode('collapsed');
+          void collapseAnimated();
         }
       });
     } catch (err) {
@@ -630,7 +720,7 @@ export function IslandShell(props: IslandShellProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape' && modeRef.current === 'expanded') {
-        setMode('collapsed');
+        void collapseAnimated();
       }
     }
     window.addEventListener('keydown', onKey);
@@ -644,9 +734,88 @@ export function IslandShell(props: IslandShellProps) {
     }
   }, [mode]);
 
-  function openExpanded() {
-    setMode('expanded');
+  /**
+   * Раскрытие: main сразу растит окно, а видимая форма вырастает
+   * из капсулы на пружине morph (Glass-HQ). Подложка стекла идёт следом.
+   */
+  async function openExpanded() {
     setTab('tasks');
+    if (modeRef.current === 'expanded' || morphBusyRef.current) {
+      return;
+    }
+    morphBusyRef.current = true;
+    try {
+      const root = shellRef.current;
+      const compactW = root?.clientWidth || window.innerWidth;
+      const compactH = root?.clientHeight || window.innerHeight;
+      const compactR = root ? outerRadius(root, compactW, compactH) : compactH / 2;
+      // Пока окно растёт, форма не должна на миг заполнить весь прямоугольник
+      if (root) {
+        root.style.clipPath = 'inset(50%)';
+      }
+      morphActiveRef.current = true;
+      morphProgress.set(0);
+      sentModeRef.current = 'expanded';
+      const result = await window.island?.setMode('expanded');
+      const zoom = sizeScaleRef.current || 1;
+      morphFromRef.current =
+        result?.from && result?.to
+          ? {
+              x: (result.from.x - result.to.x) / zoom,
+              y: (result.from.y - result.to.y) / zoom,
+              w: result.from.width / zoom,
+              h: result.from.height / zoom,
+              r: compactR,
+            }
+          : null;
+      modeRef.current = 'expanded';
+      setMode('expanded');
+      if (!morphFromRef.current) {
+        clearMorph();
+        return;
+      }
+      requestAnimationFrame(() => {
+        applyMorph(0);
+        void animate(morphProgress, 1, SPRING_MORPH).then(() => {
+          if (modeRef.current === 'expanded') {
+            clearMorph();
+            pushBackdropShapes();
+          }
+        });
+      });
+    } catch (err) {
+      console.error('openExpanded failed:', err);
+      clearMorph();
+      setMode('expanded');
+    } finally {
+      morphBusyRef.current = false;
+    }
+  }
+
+  /**
+   * Сворачивание: форма стягивается обратно в капсулу,
+   * потом main уменьшает окно. Esc, потеря фокуса и ручка идут сюда же.
+   */
+  async function collapseAnimated() {
+    if (modeRef.current !== 'expanded' || morphBusyRef.current) {
+      return;
+    }
+    morphBusyRef.current = true;
+    try {
+      if (morphFromRef.current) {
+        morphActiveRef.current = true;
+        await animate(morphProgress, 0, SPRING_COLLAPSE);
+      }
+      sentModeRef.current = 'collapsed';
+      await window.island?.setMode('collapsed');
+    } catch (err) {
+      console.error('collapseAnimated failed:', err);
+    } finally {
+      modeRef.current = 'collapsed';
+      setMode('collapsed');
+      clearMorph();
+      morphBusyRef.current = false;
+    }
   }
 
   /**
@@ -655,10 +824,10 @@ export function IslandShell(props: IslandShellProps) {
    */
   function handlePillActivate() {
     if (modeRef.current === 'expanded') {
-      setMode('collapsed');
+      void collapseAnimated();
       return;
     }
-    openExpanded();
+    void openExpanded();
   }
 
   /** Следующий из восьми режимов по кругу; main ресайзит окно и пишет viewMode */
@@ -714,7 +883,7 @@ export function IslandShell(props: IslandShellProps) {
   function collapseIsland(e?: ReactMouseEvent) {
     e?.stopPropagation();
     e?.preventDefault();
-    setMode('collapsed');
+    void collapseAnimated();
   }
 
   /** Переключает вкладку панели */
@@ -1131,7 +1300,8 @@ export function IslandShell(props: IslandShellProps) {
         onLostPointerCapture={handlePointerAbort}
         style={{ width: '100%', height: '100%' }}
       >
-        <AnimatePresence mode="wait">
+        {/* Без mode="wait": панель монтируется сразу, её форму ведёт морф */}
+        <AnimatePresence initial={false}>
           {mode !== 'expanded' ? (
             <motion.div
               key={`pill-${material}-${layout}`}
@@ -1140,8 +1310,8 @@ export function IslandShell(props: IslandShellProps) {
               animate={{ opacity: 1, scale: 1 }}
               exit={
                 isLive
-                  ? { opacity: 0, scale: 0.86 }
-                  : { opacity: 0.8 }
+                  ? { opacity: 0, scale: 0.86, transition: { duration: 0.12 } }
+                  : { opacity: 0, transition: { duration: 0.12 } }
               }
               transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             >
@@ -1150,11 +1320,10 @@ export function IslandShell(props: IslandShellProps) {
           ) : (
             <motion.div
               key="panel"
+              ref={panelRef}
               className="panel-inner"
-              initial={isGlass ? false : { opacity: 0, scale: 0.97 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={isGlass ? undefined : { opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+              initial={false}
+              exit={{ opacity: 0, transition: { duration: 0 } }}
             >
               <nav className="panel-rail" data-no-drag aria-label="Разделы">
                 {PANEL_TABS.map((item) => (
@@ -1171,13 +1340,24 @@ export function IslandShell(props: IslandShellProps) {
                     onClick={(e) => selectTab(item.id, e)}
                     data-icon-slot={item.id}
                   >
-                    <SlotIcon
-                      slot={item.id}
-                      files={iconFiles}
-                      choice={iconChoice}
-                      className="rail-slot-icon"
-                      builtin={item.icon}
-                    />
+                    {/* Стеклянная плашка выбора перетекает между вкладками (GlassTabsIndicator) */}
+                    {tab === item.id ? (
+                      <motion.span
+                        layoutId="rail-lens"
+                        className="rail-lens"
+                        transition={SPRING_LAYOUT}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <span className="rail-btn-icon">
+                      <SlotIcon
+                        slot={item.id}
+                        files={iconFiles}
+                        choice={iconChoice}
+                        className="rail-slot-icon"
+                        builtin={item.icon}
+                      />
+                    </span>
                   </button>
                 ))}
               </nav>

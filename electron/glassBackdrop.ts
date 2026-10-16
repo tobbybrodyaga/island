@@ -54,12 +54,14 @@ const TINT_EXPANDED = 0x99 / 255;
 const TINT_COMPACT = 0x66 / 255;
 // Прозрачное стекло: лёгкое затемнение, чтобы белый текст читался на светлом фоне.
 const TINT_CLEAR = 0x26 / 255;
+// Прозрачная панель чуть темнее капсулы: на ней много текста.
+const TINT_CLEAR_EXPANDED = 0x40 / 255;
 const MAX_RESTARTS = 3;
 
 /** Материал и тинт для текущего состояния подложки. */
 function glassLook(state: BackdropState): { tint: number; material: 'clear' | 'regular' } {
-  if (state.clear && !state.expanded) {
-    return { tint: TINT_CLEAR, material: 'clear' };
+  if (state.clear) {
+    return { tint: state.expanded ? TINT_CLEAR_EXPANDED : TINT_CLEAR, material: 'clear' };
   }
   return { tint: state.expanded ? TINT_EXPANDED : TINT_COMPACT, material: 'regular' };
 }

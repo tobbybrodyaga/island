@@ -2385,3 +2385,154 @@ html.glass-mode .app-root {
 .island.island--glass.island--material-clear:not(.island--expanded):not(.island--live) {
   box-shadow: none !important;
 }
+
+/* ---------- Стеклянные элементы панели в духе Glass-HQ ----------
+   Поверхность dark-appearance: светлая кромка сверху и снизу (как блик
+   maps.wgsl), тень по бокам, мягкий градиент. Нажатие — пружина press,
+   отпускание — желейный отскок release. */
+
+:root {
+  --lg-sheen: linear-gradient(
+    180deg,
+    rgba(255, 255, 255, 0.2) 0%,
+    rgba(255, 255, 255, 0.06) 46%,
+    rgba(255, 255, 255, 0.1) 100%
+  );
+  --lg-rim:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.2),
+    inset 1px 0 0 rgba(0, 0, 0, 0.16),
+    inset -1px 0 0 rgba(0, 0, 0, 0.16);
+  --lg-press: transform 0.24s cubic-bezier(0.34, 1.4, 0.64, 1);
+  --lg-release: transform 0.5s cubic-bezier(0.34, 1.9, 0.5, 1);
+}
+
+/* Рейка: выбранная вкладка — стеклянная линза, которая перетекает */
+.rail-btn {
+  position: relative;
+  isolation: isolate;
+}
+
+.rail-btn--active,
+.rail-btn--active:hover {
+  background: transparent;
+  box-shadow: none;
+}
+
+.rail-lens {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: 11px;
+  background: var(--lg-sheen), rgba(255, 255, 255, 0.08);
+  box-shadow: var(--lg-rim), 0 3px 10px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.rail-btn-icon {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+}
+
+/* Кнопки, чипы и переключатель — стеклянная поверхность */
+.tiny-btn,
+.settings-row button,
+.pomodoro-actions button,
+.shots-actions .tiny-btn {
+  background-image: var(--lg-sheen);
+  box-shadow: var(--lg-rim);
+  transition: var(--lg-release), background-color 0.15s ease, color 0.15s ease;
+}
+
+.task-cat,
+.notes-save,
+.pomodoro-actions .primary,
+.traffic--excel {
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0) 58%);
+  box-shadow: var(--lg-rim), 0 1px 4px rgba(0, 0, 0, 0.25);
+  transition: var(--lg-release), filter 0.15s ease;
+}
+
+.add-switch {
+  box-shadow: var(--lg-rim);
+}
+
+.add-switch-knob {
+  background: var(--lg-sheen), rgba(255, 255, 255, 0.92);
+  box-shadow: var(--lg-rim), 0 2px 6px rgba(0, 0, 0, 0.3);
+  transition: left 0.4s cubic-bezier(0.34, 1.5, 0.64, 1), var(--lg-release);
+}
+
+.rail-btn,
+.tiny-btn,
+.task-cat,
+.notes-save,
+.settings-row button,
+.pomodoro-actions button,
+.add-switch,
+.traffic {
+  transition: var(--lg-release), color 0.18s ease, background-color 0.18s ease, filter 0.15s ease;
+}
+
+.rail-btn:active,
+.tiny-btn:active,
+.task-cat:active,
+.notes-save:active,
+.settings-row button:active,
+.pomodoro-actions button:active,
+.add-switch:active,
+.traffic:active {
+  transform: scale(0.92);
+  transition: var(--lg-press);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-btn,
+  .tiny-btn,
+  .task-cat,
+  .notes-save,
+  .settings-row button,
+  .pomodoro-actions button,
+  .add-switch,
+  .traffic {
+    transition: none;
+  }
+}
+
+/* ---------- Прозрачная панель clear ----------
+   Стекло без блюра: текст держат тёмные стеклянные плашки под строками. */
+
+.island--material-clear.island--expanded .panel-rail {
+  background: rgba(14, 14, 18, 0.42) !important;
+  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.08);
+}
+
+.island--material-clear.island--expanded .task-item {
+  background: var(--lg-sheen), rgba(14, 14, 18, 0.5);
+  box-shadow: var(--lg-rim), 0 2px 8px rgba(0, 0, 0, 0.22);
+}
+
+.island--material-clear.island--expanded .task-item--active {
+  background: var(--lg-sheen), rgba(10, 70, 140, 0.5);
+}
+
+.island--material-clear.island--expanded .task-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.island--material-clear.island--expanded .motivation,
+.island--material-clear.island--expanded .panel-content {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+.island--material-clear.island--expanded .map-stat,
+.island--material-clear.island--expanded .map-calendar,
+.island--material-clear.island--expanded .notes-input,
+.island--material-clear.island--expanded .clipboard-item,
+.island--material-clear.island--expanded .quick-item {
+  background: rgba(14, 14, 18, 0.5);
+}
