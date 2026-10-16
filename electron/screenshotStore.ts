@@ -242,6 +242,95 @@ export function deleteScreenshot(id: string): boolean {
   }
 }
 
+/**
+ * Удаляет несколько скринов одной операцией:
+ * index.json пишется один раз, UI получает одно обновление.
+ */
+export function deleteScreenshots(ids: string[]): number {
+  try {
+    const wanted = new Set(ids.filter((id) => typeof id === 'string'));
+    if (!wanted.size) {
+      return 0;
+    }
+    const removed = shots.filter((shot) => wanted.has(shot.id));
+    if (!removed.length) {
+      return 0;
+    }
+    shots = shots.filter((shot) => !wanted.has(shot.id));
+    for (const item of removed) {
+      try {
+        const filePath = path.join(getShotsDir(), item.fileName);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (error) {
+        console.error('deleteScreenshots unlink failed:', error);
+      }
+    }
+    writeMeta();
+    emit();
+    return removed.length;
+  } catch (error) {
+    console.error('deleteScreenshots failed:', error);
+    return 0;
+  }
+}
+
+/** Пути к файлам выбранных скринов в порядке сетки; отсутствующие пропускаются */
+export function getScreenshotFilePaths(ids: string[]): string[] {
+  try {
+    const wanted = new Set(ids);
+    return shots
+      .filter((shot) => wanted.has(shot.id))
+      .map((shot) => path.join(getShotsDir(), shot.fileName))
+      .filter((filePath) => fs.existsSync(filePath));
+  } catch (error) {
+    console.error('getScreenshotFilePaths failed:', error);
+    return [];
+  }
+}
+
+/** Имя файла по времени снимка: screenshot-2026-10-16_12-47-05.png */
+function exportFileName(createdAt: number): string {
+  const d = new Date(createdAt);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `screenshot-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}.png`;
+}
+
+/** Копирует выбранные скрины в папку; существующие файлы не перезаписывает */
+export function saveScreenshotsTo(
+  ids: string[],
+  dir: string,
+): { saved: number; failed: number } {
+  let saved = 0;
+  let failed = 0;
+  try {
+    const wanted = new Set(ids);
+    for (const shot of shots.filter((item) => wanted.has(item.id))) {
+      try {
+        const source = path.join(getShotsDir(), shot.fileName);
+        if (!fs.existsSync(source)) {
+          failed += 1;
+          continue;
+        }
+        const base = exportFileName(shot.createdAt).replace(/\.png$/, '');
+        let target = path.join(dir, `${base}.png`);
+        for (let n = 2; fs.existsSync(target); n += 1) {
+          target = path.join(dir, `${base} (${n}).png`);
+        }
+        fs.copyFileSync(source, target, fs.constants.COPYFILE_EXCL);
+        saved += 1;
+      } catch (error) {
+        console.error('saveScreenshotsTo file failed:', error);
+        failed += 1;
+      }
+    }
+  } catch (error) {
+    console.error('saveScreenshotsTo failed:', error);
+  }
+  return { saved, failed };
+}
+
 /** Меняет порядок скринов после drag-and-drop */
 export function reorderScreenshots(orderedIds: string[]): boolean {
   try {

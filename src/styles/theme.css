@@ -2301,3 +2301,57 @@ html.glass-mode .app-root {
 .subtask-title {
   cursor: text;
 }
+/* ---------- Выбор нескольких скриншотов (этап 4) ---------- */
+
+.shots-pane:focus {
+  outline: none;
+}
+
+.shot-card--selected,
+.shot-card--selected:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Галочка в левом верхнем углу, крестик удаления остаётся справа */
+.shot-check {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+
+.shots-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.shots-actions-count {
+  font-size: 11px;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.shots-actions .tiny-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.shots-delete-confirm {
+  background: var(--danger);
+  color: #fff;
+}

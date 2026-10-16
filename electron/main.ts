@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   desktopCapturer,
+  dialog,
   ipcMain,
   Menu,
   nativeImage,
@@ -41,6 +42,9 @@ import {
 } from './clipboardHistory';
 import {
   deleteScreenshot,
+  deleteScreenshots,
+  getScreenshotFilePaths,
+  saveScreenshotsTo,
   getScreenshotDataUrl,
   getSystemQuickPaths,
   listScreenshots,
@@ -153,6 +157,8 @@ let isDragging = false;
 let viewMode: ViewMode = { material: 'black', layout: 'minimal' };
 /** Клик раскрытия не должен тут же схлопнуться из-за blur на том же жесте. */
 let expandGuardUntil = 0;
+/** Открыт системный диалог (выбор папки): blur от него не сворачивает остров */
+let modalDialogOpen = false;
 /** Масштаб острова (Ctrl + колесо) */
 let sizeScale = 1;
 let isQuitting = false;
@@ -1177,7 +1183,7 @@ function createWindow(): void {
 
   mainWindow.on('blur', () => {
     try {
-      if (Date.now() < expandGuardUntil) {
+      if (Date.now() < expandGuardUntil || modalDialogOpen) {
         return;
       }
       if (currentMode === 'expanded' || currentMode === 'peek') {
@@ -1916,6 +1922,144 @@ ipcMain.on('island:drag-screenshot', (event, id: string) => {
     });
   } catch (error) {
     console.error('drag-screenshot failed:', error);
+  }
+});
+
+/** Оставляет только строковые id из того, что прислал рендерер */
+function sanitizeIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.filter((id): id is string => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Кладёт файлы в буфер Windows как список (CF_HDROP) через Set-Clipboard.
+ * clipboard.writeBuffer('CF_HDROP') в Electron регистрирует свой формат,
+ * а не стандартный, поэтому вставка в Проводник/мессенджеры не работает.
+ */
+function writeFileListToClipboard(paths: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    try {
+      const child = spawn(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "$p = $env:ISLAND_CLIP_PATHS -split '\\|'; Set-Clipboard -LiteralPath $p",
+        ],
+        {
+          windowsHide: true,
+          stdio: 'ignore',
+          env: { ...process.env, ISLAND_CLIP_PATHS: paths.join('|') },
+        },
+      );
+      const timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          /* уже завершился */
+        }
+        resolve(false);
+      }, 8000);
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        console.error('Set-Clipboard spawn failed:', error);
+        resolve(false);
+      });
+      child.on('exit', (code) => {
+        clearTimeout(timer);
+        resolve(code === 0);
+      });
+    } catch (error) {
+      console.error('writeFileListToClipboard failed:', error);
+      resolve(false);
+    }
+  });
+}
+
+/** Пакетное удаление: index.json и список в UI обновляются один раз */
+ipcMain.handle('island:delete-screenshots', (_event, raw: unknown) => {
+  try {
+    const deleted = deleteScreenshots(sanitizeIds(raw));
+    return { ok: deleted > 0, deleted };
+  } catch (error) {
+    console.error('delete-screenshots failed:', error);
+    return { ok: false, deleted: 0 };
+  }
+});
+
+/** Один скрин — картинкой, несколько — списком файлов */
+ipcMain.handle('island:copy-screenshots', async (_event, raw: unknown) => {
+  try {
+    const ids = sanitizeIds(raw);
+    if (ids.length === 1) {
+      return { ok: copyScreenshotToClipboard(ids[0]), mode: 'image', count: 1 };
+    }
+    const paths = getScreenshotFilePaths(ids);
+    if (!paths.length) {
+      return { ok: false, mode: 'files', count: 0 };
+    }
+    const ok = await writeFileListToClipboard(paths);
+    return { ok, mode: 'files', count: paths.length };
+  } catch (error) {
+    console.error('copy-screenshots failed:', error);
+    return { ok: false, mode: 'files', count: 0 };
+  }
+});
+
+/** Сохранение выбранных скринов в папку, которую выбирает пользователь */
+ipcMain.handle('island:save-screenshots-to', async (_event, raw: unknown) => {
+  try {
+    const ids = sanitizeIds(raw);
+    if (!ids.length) {
+      return { ok: false, canceled: false, saved: 0, failed: 0 };
+    }
+    modalDialogOpen = true;
+    let picked: Electron.OpenDialogReturnValue;
+    try {
+      const options: Electron.OpenDialogOptions = {
+        title: 'Сохранить скриншоты в папку',
+        properties: ['openDirectory', 'createDirectory'],
+      };
+      picked = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+    } finally {
+      modalDialogOpen = false;
+    }
+    const dir = picked.filePaths[0];
+    if (picked.canceled || !dir) {
+      return { ok: false, canceled: true, saved: 0, failed: 0 };
+    }
+    const result = saveScreenshotsTo(ids, dir);
+    return { ok: result.saved > 0, canceled: false, dir, ...result };
+  } catch (error) {
+    modalDialogOpen = false;
+    console.error('save-screenshots-to failed:', error);
+    return { ok: false, canceled: false, saved: 0, failed: 0 };
+  }
+});
+
+/** Нативный drag нескольких файлов скринов в другие окна */
+ipcMain.on('island:drag-screenshots', (event, raw: unknown) => {
+  try {
+    const paths = getScreenshotFilePaths(sanitizeIds(raw));
+    if (!paths.length) {
+      return;
+    }
+    const icon = nativeImage.createFromPath(paths[0]);
+    const dragIcon = icon.isEmpty()
+      ? nativeImage.createEmpty()
+      : icon.resize({ width: 64, height: 64, quality: 'better' });
+    event.sender.startDrag({
+      file: paths[0],
+      files: paths,
+      icon: dragIcon,
+    });
+  } catch (error) {
+    console.error('drag-screenshots failed:', error);
   }
 });
 

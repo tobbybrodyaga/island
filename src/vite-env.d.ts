@@ -125,6 +125,18 @@ interface IslandApi {
   ) => Promise<{ ok: boolean; dataUrl: string | null }>;
   copyScreenshot: (id: string) => Promise<{ ok: boolean }>;
   startScreenshotDrag: (id: string) => void;
+  deleteScreenshots: (ids: string[]) => Promise<{ ok: boolean; deleted: number }>;
+  copyScreenshots: (
+    ids: string[],
+  ) => Promise<{ ok: boolean; mode: 'image' | 'files'; count: number }>;
+  saveScreenshotsTo: (ids: string[]) => Promise<{
+    ok: boolean;
+    canceled: boolean;
+    dir?: string;
+    saved: number;
+    failed: number;
+  }>;
+  startScreenshotsDrag: (ids: string[]) => void;
   sendCapsuleRect: (rect: {
     x: number;
     y: number;

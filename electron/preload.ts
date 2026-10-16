@@ -123,6 +123,30 @@ const islandApi = {
   startScreenshotDrag: (id: string) => {
     ipcRenderer.send('island:drag-screenshot', id);
   },
+  /** Пакетные операции над выделенными скринами */
+  deleteScreenshots: (ids: string[]) =>
+    ipcRenderer.invoke('island:delete-screenshots', ids) as Promise<{
+      ok: boolean;
+      deleted: number;
+    }>,
+  copyScreenshots: (ids: string[]) =>
+    ipcRenderer.invoke('island:copy-screenshots', ids) as Promise<{
+      ok: boolean;
+      mode: 'image' | 'files';
+      count: number;
+    }>,
+  saveScreenshotsTo: (ids: string[]) =>
+    ipcRenderer.invoke('island:save-screenshots-to', ids) as Promise<{
+      ok: boolean;
+      canceled: boolean;
+      dir?: string;
+      saved: number;
+      failed: number;
+    }>,
+  /** Нативный drag нескольких файлов сразу */
+  startScreenshotsDrag: (ids: string[]) => {
+    ipcRenderer.send('island:drag-screenshots', ids);
+  },
 
   /** Прямоугольник и радиус основы капсулы в DIP */
   sendCapsuleRect: (rect: {
