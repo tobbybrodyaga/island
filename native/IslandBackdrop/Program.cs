@@ -31,6 +31,12 @@ internal sealed class BackdropCommand
     [JsonPropertyName("tint")] public double Tint { get; set; }
     /// <summary>Несколько фигур для разворота. Координаты в физических пикселях экрана.</summary>
     [JsonPropertyName("items")] public List<ShapeItem>? Items { get; set; }
+    /// <summary>regular — матовое (блюр + кольцо преломления), clear — прозрачное без блюра</summary>
+    [JsonPropertyName("material")] public string? Material { get; set; }
+
+    /// <summary>Прозрачное стекло в духе Glass-HQ clear.</summary>
+    [JsonIgnore]
+    public bool IsClear => string.Equals(Material, "clear", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Один скруглённый кусок подложки.</summary>
@@ -669,7 +675,7 @@ internal sealed class BackdropWindow
             {
                 _root.Children.InsertAtTop(host);
             }
-            _slots.Add(new ShapeSlot(host, geometry, tintBrush));
+            _slots.Add(new ShapeSlot(host, geometry, tintBrush, blur));
         }
 
         var minX = items.Min(item => item.X);
@@ -683,6 +689,7 @@ internal sealed class BackdropWindow
         var alpha = (byte)Math.Round(Math.Clamp(cmd.Tint, 0, 1) * 255);
         var edge = (cmd.Edge ?? "free").ToLowerInvariant();
         var glassShapes = new List<GlassShape>(items.Count);
+        var clear = cmd.IsClear && _refraction != null;
         for (var i = 0; i < items.Count; i++)
         {
             var item = items[i];
@@ -719,23 +726,29 @@ internal sealed class BackdropWindow
             slot.Geometry.Offset = offset;
             slot.Geometry.Size = size;
             slot.Geometry.CornerRadius = new Vector2(r, r);
-            slot.Tint.Color = Color.FromArgb(alpha, 12, 12, 14);
+            // Прозрачное стекло: блюр и тинт рисует шейдер, своего слоя нет
+            slot.Blur.IsVisible = !clear;
+            slot.Tint.Color = Color.FromArgb(clear ? (byte)0 : alpha, 12, 12, 14);
             // Та же геометрия для шейдера: плоская сторона уходит за край окна
             glassShapes.Add(new GlassShape(localX + offset.X, localY + offset.Y, size.X, size.Y, r));
         }
 
         PlaceWindow(cmd.Owner, minX, minY, unionW, unionH);
-        _refraction?.Update(minX, minY, unionW, unionH, glassShapes, cmd.Tint);
+        _refraction?.Update(minX, minY, unionW, unionH, glassShapes, cmd.Tint, clear);
     }
 
     private sealed class ShapeSlot
     {
-        public ShapeSlot(ContainerVisual host, CompositionRoundedRectangleGeometry geometry, CompositionColorBrush tint)
+        public ShapeSlot(ContainerVisual host, CompositionRoundedRectangleGeometry geometry, CompositionColorBrush tint, SpriteVisual blur)
         {
             Host = host;
             Geometry = geometry;
             Tint = tint;
+            Blur = blur;
         }
+
+        /// <summary>Живой блюр HostBackdrop; у прозрачного стекла выключен.</summary>
+        public SpriteVisual Blur { get; }
 
         public ContainerVisual Host { get; }
         public CompositionRoundedRectangleGeometry Geometry { get; }
@@ -782,16 +795,21 @@ internal sealed class BackdropWindow
             glass = new GlassShape(offset.X, offset.Y, size.X, size.Y, r);
         }
 
+        var clear = cmd.IsClear && _refraction != null;
+        if (_backdrop != null)
+        {
+            _backdrop.IsVisible = !clear;
+        }
         if (_tintBrush != null)
         {
-            var a = (byte)Math.Round(Math.Clamp(cmd.Tint, 0, 1) * 255);
+            var a = clear ? (byte)0 : (byte)Math.Round(Math.Clamp(cmd.Tint, 0, 1) * 255);
             _tintBrush.Color = Color.FromArgb(a, 12, 12, 14);
         }
 
         PlaceWindow(cmd.Owner, cmd.X, cmd.Y, w, h);
         if (glass is { } shape)
         {
-            _refraction?.Update(cmd.X, cmd.Y, w, h, new[] { shape }, cmd.Tint);
+            _refraction?.Update(cmd.X, cmd.Y, w, h, new[] { shape }, cmd.Tint, clear);
         }
     }
 
@@ -861,7 +879,8 @@ internal static class Program
                     H = 72,
                     R = edge == "free" ? 36 : 18,
                     Edge = edge,
-                    Tint = 0.22,
+                    Tint = Array.IndexOf(args, "--clear") >= 0 ? 0.15 : 0.22,
+                    Material = Array.IndexOf(args, "--clear") >= 0 ? "clear" : "regular",
                 });
 
                 var dumpIndex = Array.IndexOf(args, "--dump");

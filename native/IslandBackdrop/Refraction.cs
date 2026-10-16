@@ -120,7 +120,7 @@ internal struct RefractionParams
     public Vector4 Radii;
     /// <summary>x — число фигур, y — сила преломления px, z — ширина фаски px, w — тинт</summary>
     public Vector4 Optics;
-    /// <summary>x — сила блика, y — вес кольца преломления</summary>
+    /// <summary>x — сила блика, y — вес кольца преломления, z — 1 для прозрачного стекла</summary>
     public Vector4 Light;
 }
 
@@ -198,7 +198,19 @@ float4 PS(VSOut i) : SV_Target
     float2 src = Origin.xy + p - n * edge * Optics.y;
     src = clamp(src, float2(0.5, 0.5), Origin.zw - 0.5);
     float3 c = Cap.SampleLevel(Samp, src / Origin.zw, 0).rgb;
-    c = lerp(c, float3(12.0, 12.0, 14.0) / 255.0, Optics.w * 0.6);
+    bool clearGlass = Light.z > 0.5;
+    if (clearGlass)
+    {
+        // materials.ts clear/dark: подъём теней, срез светов и лёгкий бледный тон
+        float3 tone = c + 0.15 * pow(1.0 - c, 3.0) - 0.20 * pow(c, 3.0);
+        float3 tinted = 0.38 * c + 0.20;
+        c = saturate(0.86 * tone + 0.14 * tinted);
+        c = lerp(c, float3(12.0, 12.0, 14.0) / 255.0, Optics.w);
+    }
+    else
+    {
+        c = lerp(c, float3(12.0, 12.0, 14.0) / 255.0, Optics.w * 0.6);
+    }
 
     // maps.wgsl: направленный блик сверху и снизу по тонкой кромке
     float cs = cos(1.08);
@@ -209,7 +221,8 @@ float4 PS(VSOut i) : SV_Target
     float diffuse = directional * 0.18 * pow(1.0 - saturate(-d / 4.5), 2.0);
     float hl = saturate((spec + diffuse) * Light.x);
 
-    float mask = saturate(edge * Light.y);
+    // Матовое: только кольцо у кромки поверх блюра. Прозрачное: вся фигура.
+    float mask = clearGlass ? 1.0 : saturate(edge * Light.y);
     float3 rgb = c * mask;
     float a = mask;
     rgb = rgb * (1.0 - hl) + hl;
@@ -337,7 +350,7 @@ float4 PS(VSOut i) : SV_Target
     /// Новая геометрия: окно подложки на экране и фигуры в его пикселях.
     /// Вызывается из UI-потока подложки.
     /// </summary>
-    public void Update(int windowX, int windowY, int width, int height, IReadOnlyList<GlassShape> shapes, double tint)
+    public void Update(int windowX, int windowY, int width, int height, IReadOnlyList<GlassShape> shapes, double tint, bool clear = false)
     {
         if (_disposed || width < 1 || height < 1 || shapes.Count == 0)
         {
@@ -349,7 +362,7 @@ float4 PS(VSOut i) : SV_Target
             lock (_gate)
             {
                 EnsureSwapChain(width, height);
-                _params = BuildParams(windowX, windowY, shapes, tint);
+                _params = BuildParams(windowX, windowY, shapes, tint, clear);
                 _active = true;
             }
             Visual.Size = new Vector2(width, height);
@@ -381,7 +394,7 @@ float4 PS(VSOut i) : SV_Target
     }
 
     /// <summary>Сила преломления и ширина фаски по размеру самой маленькой фигуры.</summary>
-    private RefractionParams BuildParams(int windowX, int windowY, IReadOnlyList<GlassShape> shapes, double tint)
+    private RefractionParams BuildParams(int windowX, int windowY, IReadOnlyList<GlassShape> shapes, double tint, bool clear)
     {
         var p = new RefractionParams();
         var count = Math.Min(MaxShapes, shapes.Count);
@@ -401,10 +414,11 @@ float4 PS(VSOut i) : SV_Target
         p.Shape3 = rects[3];
         p.Radii = new Vector4(radii[0], radii[1], radii[2], radii[3]);
 
-        var bezel = Math.Clamp(minDim * 0.45f, 4f, 22f);
-        var refraction = Math.Clamp(minDim * 0.8f, 6f, 42f);
+        // Как в Glass-HQ: преломление маленькой фигуры ограничено её отступом
+        var bezel = Math.Clamp(minDim * 0.3f, 4f, 20f);
+        var refraction = Math.Clamp(minDim * 0.35f, 4f, 30f);
         p.Optics = new Vector4(count, refraction, bezel, (float)Math.Clamp(tint, 0, 1));
-        p.Light = new Vector4(0.9f, 1.0f, 0, 0);
+        p.Light = new Vector4(0.9f, 1.0f, clear ? 1f : 0f, 0);
         p.Origin = new Vector4(
             windowX - _monitorRect.Left,
             windowY - _monitorRect.Top,

@@ -2356,3 +2356,32 @@ html.glass-mode .app-root {
   background: var(--danger);
   color: #fff;
 }
+
+/* ---------- Прозрачное стекло clear (Glass-HQ clear) ----------
+   Фон и преломление рисует IslandBackdrop.exe, здесь — фигуры и текст.
+   Раскрытая панель в clear матовая, как меню в Glass-HQ. */
+
+.island--material-clear .live-shape {
+  background: transparent;
+  color: #fff;
+}
+
+.island--material-clear.island--expanded {
+  background: transparent !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
+/* На прозрачном стекле белый текст держит лёгкая тень */
+.island--material-clear:not(.island--expanded) .pill-title,
+.island--material-clear:not(.island--expanded) .pill-time,
+.island--material-clear:not(.island--expanded) .pill-caption,
+.island--material-clear:not(.island--expanded) .live-icon,
+.island--material-clear:not(.island--expanded) .pill-emoji {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55), 0 0 6px rgba(0, 0, 0, 0.35) !important;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.45));
+}
+
+/* Блик кромки рисует шейдер — свой верхний блик CSS у clear не нужен */
+.island.island--glass.island--material-clear:not(.island--expanded):not(.island--live) {
+  box-shadow: none !important;
+}

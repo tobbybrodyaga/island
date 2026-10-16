@@ -29,6 +29,7 @@ import {
   resolveStoredView,
   normalizeViewMode,
   nextViewMode,
+  isGlassMaterial,
   type ViewMode,
 } from '../src/viewMode';
 import {
@@ -566,10 +567,12 @@ function syncGlassMaterial(): void {
     if (process.platform !== 'win32') {
       return;
     }
-    const glass = viewMode.material === 'artic';
+    const glass = isGlassMaterial(viewMode.material);
     const expanded = currentMode === 'expanded';
+    // Прозрачное стекло только в компакте: панель с текстом всегда матовая
+    const clear = viewMode.material === 'clear' && !expanded;
     try {
-      if (glass && backdrop?.enable({ edge: currentEdge, expanded })) {
+      if (glass && backdrop?.enable({ edge: currentEdge, expanded, clear })) {
         mainWindow.setBackgroundMaterial('none');
       } else if (glass) {
         mainWindow.setBackgroundMaterial('acrylic');
@@ -781,7 +784,11 @@ function applyLayout(mode: IslandMode): void {
   freeY = target.y;
   mainWindow.setBounds(target, false);
   try {
-    backdrop?.setState({ expanded: mode === 'expanded', edge: currentEdge });
+    backdrop?.setState({
+      expanded: mode === 'expanded',
+      edge: currentEdge,
+      clear: viewMode.material === 'clear' && mode !== 'expanded',
+    });
     backdrop?.push();
   } catch (error) {
     console.error('backdrop layout push failed:', error);

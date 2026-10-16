@@ -1,4 +1,4 @@
-﻿import {
+import {
   MouseEvent as ReactMouseEvent,
   ReactNode,
   useCallback,
@@ -26,7 +26,12 @@ import { NotesPanel } from './NotesPanel';
 import { QuickDataPanel } from './QuickDataPanel';
 import { ScreenshotsPanel } from './ScreenshotsPanel';
 import { EfficiencyMap } from './EfficiencyMap';
-import { nextViewMode, normalizeViewMode, type ViewMode } from '../viewMode';
+import {
+  isGlassMaterial,
+  nextViewMode,
+  normalizeViewMode,
+  type ViewMode,
+} from '../viewMode';
 
 export type IslandMode = 'collapsed' | 'peek' | 'expanded';
 type EdgeOrFree = 'top' | 'bottom' | 'left' | 'right' | 'free';
@@ -450,7 +455,7 @@ export function IslandShell(props: IslandShellProps) {
    */
   const pushBackdropShapes = useCallback(() => {
     try {
-      if (viewModeRef.current.material !== 'artic') {
+      if (!isGlassMaterial(viewModeRef.current.material)) {
         return;
       }
       const root = shellRef.current;
@@ -935,7 +940,7 @@ export function IslandShell(props: IslandShellProps) {
 
   const { material, layout } = viewMode;
   const vertical = edge === 'left' || edge === 'right';
-  const isArtic = material === 'artic';
+  const isGlass = isGlassMaterial(material);
   const showCactus = material === 'cactus' && edge === 'free' && mode !== 'expanded';
   /** Три отдельные фигуры: только компакт extended */
   const isLive = layout === 'extended' && mode !== 'expanded' && !showCactus;
@@ -944,7 +949,7 @@ export function IslandShell(props: IslandShellProps) {
 
   useEffect(() => {
     try {
-      document.documentElement.classList.toggle('glass-mode', isArtic);
+      document.documentElement.classList.toggle('glass-mode', isGlass);
     } catch (err) {
       console.error(err);
     }
@@ -955,7 +960,7 @@ export function IslandShell(props: IslandShellProps) {
         /* ignore */
       }
     };
-  }, [isArtic]);
+  }, [isGlass]);
 
   /** Геометрия подложки: смена режима, края, раскладки, таймера; потом кадры анимации */
   useEffect(() => {
@@ -992,8 +997,8 @@ export function IslandShell(props: IslandShellProps) {
     `island--material-${material}`,
     `island--layout-${layout}`,
     `island--edge-${edge}`,
-    isArtic ? 'island--glass' : '',
-    isArtic && isDragging ? 'island--glass-moving' : '',
+    isGlass ? 'island--glass' : '',
+    isGlass && isDragging ? 'island--glass-moving' : '',
     isLive ? 'island--live' : '',
     showCactus ? 'island--cactus' : '',
     topCenter ? 'island--top-center' : '',
@@ -1115,7 +1120,7 @@ export function IslandShell(props: IslandShellProps) {
       <motion.div
         ref={shellRef}
         className={islandClass}
-        initial={isArtic ? false : { opacity: 0.92, scale: 0.98 }}
+        initial={isGlass ? false : { opacity: 0.92, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
         onContextMenu={handleContextMenu}
@@ -1146,9 +1151,9 @@ export function IslandShell(props: IslandShellProps) {
             <motion.div
               key="panel"
               className="panel-inner"
-              initial={isArtic ? false : { opacity: 0, scale: 0.97 }}
+              initial={isGlass ? false : { opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={isArtic ? undefined : { opacity: 0, scale: 0.98 }}
+              exit={isGlass ? undefined : { opacity: 0, scale: 0.98 }}
               transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             >
               <nav className="panel-rail" data-no-drag aria-label="Разделы">

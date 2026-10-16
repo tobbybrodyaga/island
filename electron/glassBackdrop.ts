@@ -30,6 +30,8 @@ export interface BackdropState {
   radius?: number;
   /** Несколько фигур разворота в DIP относительно окна. Пусто — одна капсула через show. */
   shapes?: BackdropShape[];
+  /** Прозрачное стекло (Glass-HQ clear): без блюра, фон виден и преломляется у кромки. */
+  clear?: boolean;
 }
 
 export interface BackdropShape {
@@ -50,7 +52,17 @@ const R_EDGE_EXPANDED = 22;
 // Компакт светлее, чтобы капсула читалась как стекло, а не как тёмная плашка.
 const TINT_EXPANDED = 0x99 / 255;
 const TINT_COMPACT = 0x66 / 255;
+// Прозрачное стекло: лёгкое затемнение, чтобы белый текст читался на светлом фоне.
+const TINT_CLEAR = 0x26 / 255;
 const MAX_RESTARTS = 3;
+
+/** Материал и тинт для текущего состояния подложки. */
+function glassLook(state: BackdropState): { tint: number; material: 'clear' | 'regular' } {
+  if (state.clear && !state.expanded) {
+    return { tint: TINT_CLEAR, material: 'clear' };
+  }
+  return { tint: state.expanded ? TINT_EXPANDED : TINT_COMPACT, material: 'regular' };
+}
 
 function resolveExe(): string {
   // dev: `electron .` из island/ → getAppPath() = island/
@@ -167,7 +179,7 @@ export class GlassBackdrop {
       r: Math.max(0, Math.round(rDip * scale) - 1),
       edge,
       owner: hwndOf(w),
-      tint: this.state.expanded ? TINT_EXPANDED : TINT_COMPACT,
+      ...glassLook(this.state),
     });
   }
 
@@ -195,7 +207,7 @@ export class GlassBackdrop {
       this.send({
         cmd: 'shapes',
         owner: hwndOf(win),
-        tint: this.state.expanded ? TINT_EXPANDED : TINT_COMPACT,
+        ...glassLook(this.state),
         edge: this.state.edge,
         items,
       });

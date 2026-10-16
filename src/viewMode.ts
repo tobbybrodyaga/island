@@ -1,5 +1,14 @@
-/** Материал фона острова. На форму не влияет. */
-export type Material = 'black' | 'artic' | 'cactus';
+/**
+ * Материал фона острова. На форму не влияет.
+ * artic — матовое стекло (живой блюр + преломление кромки),
+ * clear — прозрачное стекло в духе Glass-HQ clear (фон виден, преломляется у кромки).
+ */
+export type Material = 'black' | 'artic' | 'clear' | 'cactus';
+
+/** Стеклянные материалы: у них подложка IslandBackdrop.exe. */
+export function isGlassMaterial(material: Material): boolean {
+  return material === 'artic' || material === 'clear';
+}
 
 /** Что показано в компактном виде. */
 export type Layout = 'minimal' | 'timer' | 'extended' | 'task';
@@ -10,7 +19,10 @@ export interface ViewMode {
   layout: Layout;
 }
 
-/** Восемь режимов по кругу. Кактус в цикле с раскладкой minimal, рисуется своим силуэтом. */
+/**
+ * Режимы по кругу: чёрные, матовое стекло, прозрачное стекло, кактус.
+ * Кактус в цикле с раскладкой minimal, рисуется своим силуэтом.
+ */
 export const VIEW_CYCLE: ViewMode[] = [
   { material: 'black', layout: 'minimal' },
   { material: 'black', layout: 'timer' },
@@ -19,12 +31,21 @@ export const VIEW_CYCLE: ViewMode[] = [
   { material: 'artic', layout: 'timer' },
   { material: 'artic', layout: 'extended' },
   { material: 'artic', layout: 'task' },
+  { material: 'clear', layout: 'minimal' },
+  { material: 'clear', layout: 'timer' },
+  { material: 'clear', layout: 'extended' },
+  { material: 'clear', layout: 'task' },
   { material: 'cactus', layout: 'minimal' },
 ];
 
 /** Проверяет строку материала. */
 function isMaterial(value: unknown): value is Material {
-  return value === 'black' || value === 'artic' || value === 'cactus';
+  return (
+    value === 'black' ||
+    value === 'artic' ||
+    value === 'clear' ||
+    value === 'cactus'
+  );
 }
 
 /** Проверяет строку раскладки. */
