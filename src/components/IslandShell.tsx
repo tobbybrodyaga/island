@@ -26,10 +26,11 @@ import { NotesPanel } from './NotesPanel';
 import { QuickDataPanel } from './QuickDataPanel';
 import { ScreenshotsPanel } from './ScreenshotsPanel';
 import { EfficiencyMap } from './EfficiencyMap';
+import { nextViewMode, normalizeViewMode, type ViewMode } from '../viewMode';
 
 export type IslandMode = 'collapsed' | 'peek' | 'expanded';
-type CompactView = 'info' | 'timer' | 'minimal' | 'glass' | 'cactus';
 type EdgeOrFree = 'top' | 'bottom' | 'left' | 'right' | 'free';
+type IconFiles = Record<string, { id: string; name: string; ext: 'svg' | 'png' }[]>;
 type PanelTab =
   | 'tasks'
   | 'map'
@@ -40,30 +41,13 @@ type PanelTab =
   | 'translate'
   | 'focus';
 
-const COMPACT_CYCLE: CompactView[] = [
-  'info',
-  'timer',
-  'minimal',
-  'glass',
-  'cactus',
-];
-
-/** Старый moon из сохранений → glass */
-function normalizeCompactView(raw: unknown): CompactView {
-  if (raw === 'moon') return 'glass';
-  if (
-    raw === 'info' ||
-    raw === 'timer' ||
-    raw === 'minimal' ||
-    raw === 'glass' ||
-    raw === 'cactus'
-  ) {
-    return raw;
-  }
-  return 'info';
-}
-
-const DRAG_THRESHOLD = 7;
+/** Порог драга в CSS-пикселях (по clientX/Y, не по экрану — DPI не влияет) */
+const DRAG_THRESHOLD = 4;
+/** Дольше этого нажатие без движения уже не клик */
+const CLICK_MAX_MS = 300;
+/** Сколько гонять геометрию подложки по кадрам после смены режима */
+const BACKDROP_FOLLOW_MS = 400;
+const DEFAULT_VIEW: ViewMode = { material: 'black', layout: 'minimal' };
 
 /** Плотные заполненные иконки в духе классических SF Symbols */
 const PANEL_TABS: { id: PanelTab; label: string; icon: ReactNode }[] = [
@@ -308,6 +292,100 @@ function PillFocusIcon() {
   );
 }
 
+/**
+ * Значок слота: встроенный или файл из %AppData%\pc-dynamic-island\icons\<слот>\.
+ * SVG красится в currentColor через маску, PNG рисуется как есть.
+ */
+function SlotIcon({
+  slot,
+  files,
+  choice,
+  className,
+  builtin,
+}: {
+  slot: string;
+  files: IconFiles;
+  choice: Record<string, string>;
+  className: string;
+  builtin: ReactNode;
+}) {
+  try {
+    const id = choice[slot];
+    const file =
+      id && id !== 'builtin'
+        ? (files[slot] ?? []).find((item) => item.id === id)
+        : undefined;
+    if (!file) {
+      return <>{builtin}</>;
+    }
+    const url = `island-icon://${slot}/${encodeURIComponent(file.id)}`;
+    if (file.ext === 'svg') {
+      return (
+        <span
+          className={`${className} icon-mask`}
+          aria-hidden="true"
+          style={{
+            WebkitMaskImage: `url("${url}")`,
+            maskImage: `url("${url}")`,
+          }}
+        />
+      );
+    }
+    return (
+      <img
+        className={`${className} icon-png`}
+        src={url}
+        alt=""
+        draggable={false}
+      />
+    );
+  } catch (err) {
+    console.error(err);
+    return <>{builtin}</>;
+  }
+}
+
+/** Кольцо прогресса бегущего времени для правого круга extended */
+function ProgressRing({ progress }: { progress: number }) {
+  const r = 9;
+  const length = 2 * Math.PI * r;
+  const value = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+  return (
+    <svg className="live-ring" viewBox="0 0 24 24" aria-hidden="true">
+      <circle className="live-ring-track" cx="12" cy="12" r={r} />
+      <circle
+        className="live-ring-value"
+        cx="12"
+        cy="12"
+        r={r}
+        strokeDasharray={`${length * value} ${length}`}
+      />
+    </svg>
+  );
+}
+
+/** Обрезает название задачи для компакта task */
+function clipTaskTitle(title: string, max = 28): string {
+  const text = title.trim().replace(/\s+/g, ' ');
+  return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+/** Внешний радиус фигуры: у прилипшей к краю часть углов нулевая */
+function outerRadius(el: Element, width: number, height: number): number {
+  try {
+    const style = getComputedStyle(el);
+    const radius = Math.max(
+      parseFloat(style.borderTopLeftRadius) || 0,
+      parseFloat(style.borderTopRightRadius) || 0,
+      parseFloat(style.borderBottomLeftRadius) || 0,
+      parseFloat(style.borderBottomRightRadius) || 0,
+    );
+    return Math.min(radius, Math.min(width, height) / 2);
+  } catch {
+    return Math.min(width, height) / 2;
+  }
+}
+
 /** Интерактивные элементы не должны начинать drag */
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
@@ -323,124 +401,121 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
 /** Оболочка Dynamic Island */
 export function IslandShell(props: IslandShellProps) {
   const [mode, setMode] = useState<IslandMode>('collapsed');
-  const [compactView, setCompactView] = useState<CompactView>('info');
+  const [viewMode, setViewModeState] = useState<ViewMode>(DEFAULT_VIEW);
   const [edge, setEdge] = useState<EdgeOrFree>('top');
   const [topCenter, setTopCenter] = useState(true);
   const [tab, setTab] = useState<PanelTab>('tasks');
   const [phrase, setPhrase] = useState(() => pickMotivationPhrase());
   const [isDragging, setIsDragging] = useState(false);
-  const [glassMotion, setGlassMotion] = useState({
-    activity: 0,
-    dx: 0,
-    dy: 0,
-  });
-  /** Снимок фона под капсулой для CSS-frost (клипается overflow) */
-  const [frostUrl, setFrostUrl] = useState<string | null>(null);
-  const frostBusyRef = useRef(false);
+  const [iconFiles, setIconFiles] = useState<IconFiles>({});
+  const [iconChoice, setIconChoice] = useState<Record<string, string>>({});
   const shellRef = useRef<HTMLDivElement>(null);
-  const glassMotionRef = useRef({ activity: 0, dx: 0, dy: 0 });
-  const glassDecayRaf = useRef(0);
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  /** Зум окна (Ctrl+колесо): CSS-пиксели × sizeScale = DIP */
+  const sizeScaleRef = useRef(1);
+  const iconFilesRef = useRef(iconFiles);
+  iconFilesRef.current = iconFiles;
+  const iconChoiceRef = useRef(iconChoice);
+  iconChoiceRef.current = iconChoice;
 
+  /** Одна сессия нажатия: клик или драг */
   const dragRef = useRef<{
     tracking: boolean;
     dragging: boolean;
-    startX: number;
-    startY: number;
-    lastX: number;
-    lastY: number;
-    lastT: number;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    lastScreenX: number;
+    lastScreenY: number;
+    startT: number;
   }>({
     tracking: false,
     dragging: false,
-    startX: 0,
-    startY: 0,
-    lastX: 0,
-    lastY: 0,
-    lastT: 0,
+    pointerId: -1,
+    startClientX: 0,
+    startClientY: 0,
+    lastScreenX: 0,
+    lastScreenY: 0,
+    startT: 0,
   });
 
-  /** Параметры кромки/блика от скорости перетаскивания */
-  function applyGlassMotion(partial: {
-    activity?: number;
-    dx?: number;
-    dy?: number;
-  }) {
-    const prev = glassMotionRef.current;
-    const next = {
-      activity: Math.max(0, Math.min(1, partial.activity ?? prev.activity)),
-      dx: Math.max(-1, Math.min(1, partial.dx ?? prev.dx)),
-      dy: Math.max(-1, Math.min(1, partial.dy ?? prev.dy)),
-    };
-    glassMotionRef.current = next;
-    setGlassMotion(next);
-  }
-
-  /** Плавно гасит реакцию стекла после отпускания */
-  function decayGlassMotion() {
-    if (glassDecayRaf.current) {
-      cancelAnimationFrame(glassDecayRaf.current);
-    }
-    const tick = () => {
-      const cur = glassMotionRef.current;
-      if (cur.activity <= 0.02) {
-        applyGlassMotion({ activity: 0, dx: 0, dy: 0 });
-        glassDecayRaf.current = 0;
-        return;
-      }
-      applyGlassMotion({
-        activity: cur.activity * 0.82,
-        dx: cur.dx * 0.82,
-        dy: cur.dy * 0.82,
-      });
-      glassDecayRaf.current = requestAnimationFrame(tick);
-    };
-    glassDecayRaf.current = requestAnimationFrame(tick);
-  }
-
-  /** Обновляет frost-подложку; при неудаче пробует ещё раз */
-  async function refreshGlassFrost(attempt = 0) {
+  /**
+   * Шлёт в main прямоугольники видимых фигур в DIP относительно окна.
+   * Только для artic: подложка блюра повторяет форму элементов, а не окна.
+   */
+  const pushBackdropShapes = useCallback(() => {
     try {
-      if (frostBusyRef.current || isDragging) {
+      if (viewModeRef.current.material !== 'artic') {
         return;
       }
-      if (compactView !== 'glass' || !window.island?.captureFrostBehind) {
+      const root = shellRef.current;
+      if (!root || !window.island?.sendBackdropShapes) {
         return;
       }
-      frostBusyRef.current = true;
-      const result = await window.island.captureFrostBehind();
-      if (result.ok && result.dataUrl) {
-        setFrostUrl(result.dataUrl);
-        return;
-      }
-      if (attempt < 2) {
-        frostBusyRef.current = false;
-        window.setTimeout(() => {
-          void refreshGlassFrost(attempt + 1);
-        }, 120 + attempt * 80);
-        return;
+      const marked = Array.from(
+        root.querySelectorAll<HTMLElement>('[data-backdrop-shape]'),
+      );
+      const targets = marked.length ? marked : [root];
+      const zoom = sizeScaleRef.current || 1;
+      const shapes = targets
+        .map((el) => {
+          const rect = el.getBoundingClientRect();
+          const radius = outerRadius(el, rect.width, rect.height);
+          return {
+            x: rect.left * zoom,
+            y: rect.top * zoom,
+            width: rect.width * zoom,
+            height: rect.height * zoom,
+            radius: radius * zoom,
+          };
+        })
+        .filter((shape) => shape.width > 1 && shape.height > 1);
+      if (shapes.length) {
+        window.island.sendBackdropShapes(shapes);
       }
     } catch (err) {
+      console.error('pushBackdropShapes failed:', err);
+    }
+  }, []);
+
+  /** Пока идёт анимация раскрытия — геометрия подложки каждый кадр */
+  const followBackdrop = useCallback(() => {
+    try {
+      const until = performance.now() + BACKDROP_FOLLOW_MS;
+      const tick = () => {
+        pushBackdropShapes();
+        if (performance.now() < until) {
+          requestAnimationFrame(tick);
+        }
+      };
+      requestAnimationFrame(tick);
+    } catch (err) {
       console.error(err);
-      if (attempt < 2) {
-        frostBusyRef.current = false;
-        window.setTimeout(() => {
-          void refreshGlassFrost(attempt + 1);
-        }, 150);
+    }
+  }, [pushBackdropShapes]);
+
+  /** Значки слотов из папки icons и выбор из файла состояния */
+  useEffect(() => {
+    try {
+      if (!window.island?.getIcons) {
         return;
       }
-    } finally {
-      frostBusyRef.current = false;
+      void window.island.getIcons().then((result) => {
+        if (result.ok) {
+          setIconFiles(result.files);
+          setIconChoice(result.choice);
+        }
+      });
+      return window.island.onIconsChanged((payload) => {
+        setIconFiles(payload.files);
+        setIconChoice(payload.choice);
+      });
+    } catch (err) {
+      console.error(err);
     }
-  }
-
-  useEffect(() => {
-    return () => {
-      if (glassDecayRaf.current) {
-        cancelAnimationFrame(glassDecayRaf.current);
-      }
-    };
   }, []);
 
   const syncWindowMode = useCallback(async (next: IslandMode) => {
@@ -464,9 +539,15 @@ export function IslandShell(props: IslandShellProps) {
       }
       return window.island.onEdgeChanged((payload) => {
         setEdge(payload.edge);
-        setCompactView(normalizeCompactView(payload.compactView));
+        const next = normalizeViewMode(payload.viewMode);
+        if (next) {
+          setViewModeState(next);
+        }
         if (typeof payload.topCenter === 'boolean') {
           setTopCenter(payload.topCenter);
+        }
+        if (typeof payload.sizeScale === 'number' && payload.sizeScale > 0) {
+          sizeScaleRef.current = payload.sizeScale;
         }
       });
     } catch (err) {
@@ -481,7 +562,7 @@ export function IslandShell(props: IslandShellProps) {
         return;
       }
       return window.island.onCollapseRequest(() => {
-        if (modeRef.current === 'expanded' || modeRef.current === 'peek') {
+        if (modeRef.current !== 'collapsed') {
           setMode('collapsed');
         }
       });
@@ -522,11 +603,15 @@ export function IslandShell(props: IslandShellProps) {
           return;
         }
         const result = await window.island.loadState();
-        if (result.compactView) {
-          setCompactView(normalizeCompactView(result.compactView));
+        const stored = normalizeViewMode(result.viewMode);
+        if (stored) {
+          setViewModeState(stored);
         }
         if (result.edge) {
           setEdge(result.edge);
+        }
+        if (typeof result.sizeScale === 'number' && result.sizeScale > 0) {
+          sizeScaleRef.current = result.sizeScale;
         }
       } catch (err) {
         console.error(err);
@@ -557,14 +642,64 @@ export function IslandShell(props: IslandShellProps) {
     setTab('tasks');
   }
 
-  /** ЛКМ: collapsed → сжатая инфа (peek), peek → полная панель */
+  /**
+   * Один клик ЛКМ: компакт раскрывается в любом режиме,
+   * клик по ручке раскрытой панели сворачивает остров.
+   */
   function handlePillActivate() {
-    if (modeRef.current === 'collapsed') {
-      setMode('peek');
+    if (modeRef.current === 'expanded') {
+      setMode('collapsed');
       return;
     }
-    if (modeRef.current === 'peek') {
-      openExpanded();
+    openExpanded();
+  }
+
+  /** Следующий из восьми режимов по кругу; main ресайзит окно и пишет viewMode */
+  async function cycleViewMode() {
+    const next = nextViewMode(viewModeRef.current);
+    setViewModeState(next);
+    if (next.material === 'cactus') {
+      setEdge('free');
+    }
+    try {
+      if (!window.island?.setViewMode) {
+        return;
+      }
+      const result = await window.island.setViewMode(next);
+      const confirmed = normalizeViewMode(result.viewMode);
+      if (result.ok && confirmed) {
+        setViewModeState(confirmed);
+      }
+      if (result.edge) {
+        setEdge(result.edge);
+      }
+      if (typeof result.sizeScale === 'number' && result.sizeScale > 0) {
+        sizeScaleRef.current = result.sizeScale;
+      }
+    } catch (err) {
+      console.error('Не удалось сменить вид:', err);
+    }
+  }
+
+  /** ПКМ по значку: следующий значок слота (встроенный, затем файлы по алфавиту) */
+  async function cycleSlotIcon(slot: string) {
+    try {
+      const ids = [
+        'builtin',
+        ...(iconFilesRef.current[slot] ?? []).map((file) => file.id),
+      ];
+      const current = iconChoiceRef.current[slot] ?? 'builtin';
+      const next = ids[(ids.indexOf(current) + 1) % ids.length] ?? 'builtin';
+      if (next === current || !window.island?.setIconChoice) {
+        return;
+      }
+      setIconChoice((prev) => ({ ...prev, [slot]: next }));
+      const result = await window.island.setIconChoice(slot, next);
+      if (result.ok && result.choice) {
+        setIconChoice(result.choice);
+      }
+    } catch (err) {
+      console.error('Не удалось сменить значок:', err);
     }
   }
 
@@ -582,180 +717,172 @@ export function IslandShell(props: IslandShellProps) {
     setTab(next);
   }
 
-  async function handleContextMenu(e: ReactMouseEvent) {
+  /** ПКМ по значку меняет значок, ПКМ по остальному компакту — режим */
+  function handleContextMenu(e: ReactMouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    if (modeRef.current === 'expanded') {
-      return;
-    }
-    const idx = COMPACT_CYCLE.indexOf(compactView);
-    const next = COMPACT_CYCLE[(idx + 1) % COMPACT_CYCLE.length];
-    setCompactView(next);
-    if (next === 'cactus') {
-      setEdge('free');
-    }
     try {
-      if (window.island) {
-        const result = await window.island.setCompactView(next);
-        if (result.ok && result.compactView) {
-          setCompactView(normalizeCompactView(result.compactView));
-        }
-        if (result.edge) {
-          setEdge(result.edge);
-        }
+      const slotEl = (e.target as Element | null)?.closest?.('[data-icon-slot]');
+      const slot = slotEl?.getAttribute('data-icon-slot');
+      if (slot) {
+        void cycleSlotIcon(slot);
+        return;
       }
+      if (modeRef.current === 'expanded') {
+        return;
+      }
+      void cycleViewMode();
     } catch (err) {
       console.error(err);
     }
   }
 
   /**
-   * Drag только с pill / ручки.
-   * Кнопки и поля всегда вне drag, иначе вкладки и «свернуть» ломаются.
+   * Закрывает сессию нажатия. Драг завершается в main (там прилипание к краю),
+   * клик засчитывается только если click = true.
+   */
+  function finishPointerSession(click: boolean) {
+    const state = dragRef.current;
+    if (!state.tracking) {
+      return;
+    }
+    const wasDragging = state.dragging;
+    const pointerId = state.pointerId;
+    state.tracking = false;
+    state.dragging = false;
+    state.pointerId = -1;
+    try {
+      if (pointerId >= 0 && shellRef.current?.hasPointerCapture?.(pointerId)) {
+        shellRef.current.releasePointerCapture(pointerId);
+      }
+    } catch {
+      /* захват уже снят */
+    }
+
+    if (wasDragging) {
+      setIsDragging(false);
+      void (async () => {
+        try {
+          const result = await window.island?.dragEnd();
+          if (result?.edge) {
+            setEdge(result.edge as EdgeOrFree);
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      })();
+      return;
+    }
+
+    if (click) {
+      handlePillActivate();
+    }
+  }
+
+  /**
+   * Драг с компакта или с ручки панели.
+   * Кнопки и поля всегда вне драга, иначе вкладки и «свернуть» ломаются.
    */
   function handlePointerDown(e: React.PointerEvent) {
     if (e.button !== 0) {
       return;
     }
-
     if (isInteractiveTarget(e.target)) {
       return;
     }
-
     if (modeRef.current === 'expanded') {
-      const handle = (e.target as Element | null)?.closest?.(
-        '[data-drag-handle]',
-      );
+      const handle = (e.target as Element | null)?.closest?.('[data-drag-handle]');
       if (!handle) {
         return;
       }
     }
+    // Хвост прошлой сессии (потерянный pointerup) не должен тащить остров
+    finishPointerSession(false);
 
     dragRef.current = {
       tracking: true,
       dragging: false,
-      startX: e.screenX,
-      startY: e.screenY,
-      lastX: e.screenX,
-      lastY: e.screenY,
-      lastT: performance.now(),
+      pointerId: e.pointerId,
+      startClientX: e.clientX,
+      startClientY: e.clientY,
+      lastScreenX: e.screenX,
+      lastScreenY: e.screenY,
+      startT: performance.now(),
     };
-    (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+    try {
+      shellRef.current?.setPointerCapture?.(e.pointerId);
+    } catch {
+      /* без захвата сессию закроют buttons === 0 и blur */
+    }
   }
 
-  async function handlePointerMove(e: React.PointerEvent) {
+  function handlePointerMove(e: React.PointerEvent) {
     const state = dragRef.current;
-    if (!state.tracking) {
+    if (!state.tracking || e.pointerId !== state.pointerId) {
+      return;
+    }
+    // Кнопка уже отпущена, а pointerup не дошёл — закрываем, а не едем за мышью
+    if (e.buttons === 0) {
+      finishPointerSession(false);
       return;
     }
 
-    const totalDx = e.screenX - state.startX;
-    const totalDy = e.screenY - state.startY;
-
     if (!state.dragging) {
-      if (Math.hypot(totalDx, totalDy) < DRAG_THRESHOLD) {
+      const moved = Math.hypot(
+        e.clientX - state.startClientX,
+        e.clientY - state.startClientY,
+      );
+      if (moved < DRAG_THRESHOLD) {
         return;
       }
       state.dragging = true;
       setIsDragging(true);
       try {
-        if (compactView === 'glass') {
-          shellRef.current?.classList.add('island--glass-moving');
-          if (glassDecayRaf.current) {
-            cancelAnimationFrame(glassDecayRaf.current);
-            glassDecayRaf.current = 0;
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      }
-      try {
-        if (window.island) {
-          await window.island.dragStart();
-        }
+        void window.island?.dragStart();
       } catch (err) {
         console.error(err);
       }
     }
 
-    const now = performance.now();
-    const dt = Math.max(8, now - state.lastT);
-    const dx = e.screenX - state.lastX;
-    const dy = e.screenY - state.lastY;
-    state.lastX = e.screenX;
-    state.lastY = e.screenY;
-    state.lastT = now;
-
-    if (compactView === 'glass' && (dx !== 0 || dy !== 0)) {
-      try {
-        const speed = Math.hypot(dx, dy) / dt;
-        // Чувствительнее: даже медленное движение заметно «живит» край
-        const burst = Math.min(1, speed * 22 + 0.2);
-        const len = Math.hypot(dx, dy) || 1;
-        applyGlassMotion({
-          activity: Math.max(glassMotionRef.current.activity * 0.55, burst),
-          dx: (dx / len) * Math.max(burst, 0.35),
-          dy: (dy / len) * Math.max(burst, 0.35),
-        });
-      } catch (err) {
-        console.error(err);
-      }
-    }
-
-    // Не await: иначе IPC блокирует pointermove и стекло/drag «залипают»
+    const dx = e.screenX - state.lastScreenX;
+    const dy = e.screenY - state.lastScreenY;
+    state.lastScreenX = e.screenX;
+    state.lastScreenY = e.screenY;
+    // Не await: иначе IPC блокирует pointermove и драг «залипает»
     try {
-      if (window.island && (dx !== 0 || dy !== 0)) {
-        void window.island.dragMove(dx, dy);
+      if (dx !== 0 || dy !== 0) {
+        void window.island?.dragMove(dx, dy);
       }
     } catch (err) {
       console.error(err);
     }
   }
 
-  async function handlePointerUp(e: React.PointerEvent) {
+  function handlePointerUp(e: React.PointerEvent) {
     const state = dragRef.current;
-    if (!state.tracking) {
+    if (!state.tracking || e.pointerId !== state.pointerId) {
       return;
     }
-    state.tracking = false;
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-
-    if (state.dragging) {
-      try {
-        if (window.island) {
-          const result = await window.island.dragEnd();
-          if (result.edge) {
-            setEdge(result.edge as EdgeOrFree);
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      }
-      state.dragging = false;
-      setIsDragging(false);
-      try {
-        shellRef.current?.classList.remove('island--glass-moving');
-        if (compactView === 'glass') {
-          decayGlassMotion();
-          window.setTimeout(() => {
-            void refreshGlassFrost();
-          }, 40);
-        }
-      } catch (err) {
-        console.error(err);
-      }
-      return;
-    }
-
-    if (modeRef.current === 'expanded') {
-      return;
-    }
-    handlePillActivate();
+    const moved = Math.hypot(
+      e.clientX - state.startClientX,
+      e.clientY - state.startClientY,
+    );
+    const quick = performance.now() - state.startT < CLICK_MAX_MS;
+    finishPointerSession(!state.dragging && quick && moved < DRAG_THRESHOLD);
   }
+
+  /** pointercancel / потеря захвата: сессия закрывается без клика */
+  function handlePointerAbort() {
+    finishPointerSession(false);
+  }
+
+  /** Потеря фокуса окна закрывает сессию драга */
+  useEffect(() => {
+    const onBlur = () => finishPointerSession(false);
+    window.addEventListener('blur', onBlur);
+    return () => window.removeEventListener('blur', onBlur);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- функция читает только ref
+  }, []);
 
   async function handleQuit(e: ReactMouseEvent) {
     e.stopPropagation();
@@ -775,20 +902,47 @@ export function IslandShell(props: IslandShellProps) {
   const isTimerRunning = props.activeTask?.runningSince != null;
   const showPomodoroInPill =
     props.settings.pomodoroPhase !== 'idle' || props.settings.pomodoroRunning;
+  /** Как compactHasTimer в main: от него зависит правый круг extended */
+  const hasTimer =
+    showPomodoroInPill || props.tasks.some((task) => task.runningSince != null);
 
   const displayTime = showPomodoroInPill
     ? formatDuration(pomodoroMs)
     : formatDuration(activeElapsed);
+  const timerCaption = showPomodoroInPill
+    ? props.settings.pomodoroPhase === 'break'
+      ? 'ПЕРЕРЫВ'
+      : 'ФОКУС'
+    : 'ЗАДАЧА';
+  /** Прогресс кольца: Pomodoro — доля фазы, секундомер — доля текущего часа */
+  const ringProgress = (() => {
+    try {
+      if (showPomodoroInPill) {
+        const minutes =
+          props.settings.pomodoroPhase === 'break'
+            ? props.settings.breakMinutes
+            : props.settings.focusMinutes;
+        const total = Math.max(1, minutes * 60 * 1000);
+        return 1 - pomodoroMs / total;
+      }
+      return (activeElapsed % 3_600_000) / 3_600_000;
+    } catch {
+      return 0;
+    }
+  })();
 
+  const { material, layout } = viewMode;
   const vertical = edge === 'left' || edge === 'right';
-  const showCactus =
-    compactView === 'cactus' && edge === 'free' && mode !== 'expanded';
-  /** Режим «мутного стекла»: и pill, и развёрнутая панель */
-  const isGlassView = compactView === 'glass';
+  const isArtic = material === 'artic';
+  const showCactus = material === 'cactus' && edge === 'free' && mode !== 'expanded';
+  /** Три отдельные фигуры: только компакт extended */
+  const isLive = layout === 'extended' && mode !== 'expanded' && !showCactus;
+  /** Значок левого круга: задача, фокус или текущая вкладка */
+  const liveSlot = showPomodoroInPill ? 'focus' : props.activeTask ? 'tasks' : tab;
 
   useEffect(() => {
     try {
-      document.documentElement.classList.toggle('glass-mode', isGlassView);
+      document.documentElement.classList.toggle('glass-mode', isArtic);
     } catch (err) {
       console.error(err);
     }
@@ -799,28 +953,46 @@ export function IslandShell(props: IslandShellProps) {
         /* ignore */
       }
     };
-  }, [isGlassView]);
+  }, [isArtic]);
 
-  // Снимок фона при входе в glass / смене режима / края
+  /** Геометрия подложки: смена режима, края, раскладки, таймера; потом кадры анимации */
   useEffect(() => {
-    if (!isGlassView) {
-      setFrostUrl(null);
+    pushBackdropShapes();
+    followBackdrop();
+  }, [mode, edge, material, layout, hasTimer, pushBackdropShapes, followBackdrop]);
+
+  /** Окно или фигуры поменяли размер — новая геометрия подложки */
+  useEffect(() => {
+    const root = shellRef.current;
+    if (!root || typeof ResizeObserver === 'undefined') {
       return;
     }
-    const t = window.setTimeout(() => {
-      void refreshGlassFrost();
-    }, 60);
-    return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh по ключевым сменам геометрии
-  }, [isGlassView, mode, edge]);
+    try {
+      const observer = new ResizeObserver(() => pushBackdropShapes());
+      observer.observe(root);
+      root
+        .querySelectorAll('[data-backdrop-shape]')
+        .forEach((el) => observer.observe(el));
+      const onTransitionEnd = () => pushBackdropShapes();
+      root.addEventListener('transitionend', onTransitionEnd);
+      return () => {
+        observer.disconnect();
+        root.removeEventListener('transitionend', onTransitionEnd);
+      };
+    } catch (err) {
+      console.error(err);
+    }
+  }, [mode, layout, hasTimer, pushBackdropShapes]);
 
   const islandClass = [
     'island',
     `island--${mode}`,
-    `island--view-${compactView}`,
+    `island--material-${material}`,
+    `island--layout-${layout}`,
     `island--edge-${edge}`,
-    isGlassView ? 'island--glass' : '',
-    isGlassView && isDragging ? 'island--glass-moving' : '',
+    isArtic ? 'island--glass' : '',
+    isArtic && isDragging ? 'island--glass-moving' : '',
+    isLive ? 'island--live' : '',
     showCactus ? 'island--cactus' : '',
     topCenter ? 'island--top-center' : '',
     vertical ? 'island--vertical' : 'island--horizontal',
@@ -832,76 +1004,106 @@ export function IslandShell(props: IslandShellProps) {
     ? excerptTitle(props.activeTask.title, topCenter ? 22 : 14)
     : excerptTitle(phrase, topCenter ? 22 : 14);
 
-  /** Контент сжатой инфы в pill */
+  /** Крупные цифры и мелкая подпись справа */
+  function renderHeroTime() {
+    return (
+      <div className="pill-activity pill-activity--timer">
+        <span
+          className={
+            showPomodoroInPill
+              ? 'pill-time pill-time--hero pill-time--focus'
+              : 'pill-time pill-time--hero'
+          }
+        >
+          {displayTime}
+        </span>
+        <span className="pill-caption">{timerCaption}</span>
+      </div>
+    );
+  }
+
+  /** Зелёная точка и название активной задачи */
+  function renderTaskLine() {
+    const running = isTimerRunning || showPomodoroInPill;
+    return (
+      <div className="pill-activity pill-activity--task">
+        <span
+          className={running ? 'task-dot task-dot--on' : 'task-dot'}
+          aria-hidden="true"
+        />
+        <span className="pill-title">
+          {props.activeTask
+            ? clipTaskTitle(props.activeTask.title)
+            : 'Нет активной задачи'}
+        </span>
+      </div>
+    );
+  }
+
+  /** Компакт extended: левый круг, центральный pill, правый круг с кольцом */
+  function renderLiveRow() {
+    const builtin =
+      PANEL_TABS.find((item) => item.id === liveSlot)?.icon ?? <PillTaskIcon />;
+    return (
+      <div className="live-row">
+        <div
+          className="live-shape live-shape--circle"
+          data-backdrop-shape
+          data-icon-slot={liveSlot}
+        >
+          <SlotIcon
+            slot={liveSlot}
+            files={iconFiles}
+            choice={iconChoice}
+            className="live-icon"
+            builtin={<span className="live-icon live-icon--builtin">{builtin}</span>}
+          />
+        </div>
+        <div className="live-shape live-shape--pill" data-backdrop-shape>
+          {hasTimer ? (
+            renderHeroTime()
+          ) : (
+            <div className="pill-activity pill-activity--task">
+              <span className="pill-title">{pillLabel}</span>
+            </div>
+          )}
+        </div>
+        {hasTimer ? (
+          <div className="live-shape live-shape--circle" data-backdrop-shape>
+            <ProgressRing progress={ringProgress} />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  /** Содержимое компакта по раскладке; материал задаёт только фон */
   function renderPillContent() {
     if (showCactus) {
       return <PillCactus />;
     }
-
-    if (compactView === 'glass') {
-      return (
-        <div className="pill-activity pill-activity--glass">
-          <span className="pill-left">
-            <span className="pill-glass-dot" aria-hidden="true" />
-            <span className="pill-title">{pillLabel}</span>
-          </span>
-        </div>
-      );
+    if (layout === 'extended') {
+      return renderLiveRow();
     }
-
-    if (compactView === 'minimal') {
+    if (layout === 'task') {
+      return renderTaskLine();
+    }
+    if (layout === 'timer') {
+      return renderHeroTime();
+    }
+    // minimal: пустая капсула, при бегущем времени — только цифры
+    if (!isTimerRunning && !showPomodoroInPill) {
       return null;
     }
-
-    const showContent =
-      mode === 'peek' ||
-      compactView === 'timer' ||
-      (compactView === 'info' && (isTimerRunning || showPomodoroInPill));
-
-    if (!showContent) {
-      return null;
-    }
-
-    if (compactView === 'timer') {
-      return (
-        <div className="pill-activity pill-activity--timer">
-          {showPomodoroInPill ? (
-            <span className="pill-left pill-left--focus">
-              <PillFocusIcon />
-              <span className="pill-time pill-time--focus">{displayTime}</span>
-            </span>
-          ) : (
-            <span className="pill-time">{displayTime}</span>
-          )}
-        </div>
-      );
-    }
-
-    if (showPomodoroInPill) {
-      return (
-        <div className="pill-activity">
-          <span className="pill-left pill-left--focus">
-            <PillFocusIcon />
-            <span className="pill-time pill-time--focus">{displayTime}</span>
-          </span>
-          <span className="pill-wave" aria-hidden="true">
-            <i />
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-        </div>
-      );
-    }
-
     return (
-      <div className="pill-activity">
-        <span className="pill-left">
-          <PillTaskIcon />
-          <span className="pill-title">{pillLabel}</span>
+      <div className="pill-activity pill-activity--timer">
+        <span
+          className={
+            showPomodoroInPill ? 'pill-time pill-time--focus' : 'pill-time'
+          }
+        >
+          {displayTime}
         </span>
-        <span className="pill-time">{displayTime}</span>
       </div>
     );
   }
@@ -911,50 +1113,30 @@ export function IslandShell(props: IslandShellProps) {
       <motion.div
         ref={shellRef}
         className={islandClass}
-        initial={isGlassView ? false : { opacity: 0.92, scale: 0.98 }}
+        initial={isArtic ? false : { opacity: 0.92, scale: 0.98 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
         onContextMenu={handleContextMenu}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        style={{
-          width: '100%',
-          height: '100%',
-          ...(isGlassView
-            ? {
-                ['--glass-activity' as string]: glassMotion.activity,
-                ['--glass-dx' as string]: glassMotion.dx,
-                ['--glass-dy' as string]: glassMotion.dy,
-              }
-            : {}),
-        }}
+        onPointerCancel={handlePointerAbort}
+        onLostPointerCapture={handlePointerAbort}
+        style={{ width: '100%', height: '100%' }}
       >
-        {isGlassView ? (
-          <span className="glass-stack glass-stack--shell" aria-hidden="true">
-            <span
-              className={
-                frostUrl ? 'glass-frost' : 'glass-frost glass-frost--pending'
-              }
-              style={
-                frostUrl
-                  ? { backgroundImage: `url("${frostUrl}")` }
-                  : undefined
-              }
-            />
-            <span className="glass-body" />
-          </span>
-        ) : null}
         <AnimatePresence mode="wait">
           {mode !== 'expanded' ? (
             <motion.div
-              key={`pill-${compactView}-${mode}`}
+              key={`pill-${material}-${layout}`}
               className="pill-inner"
               initial={{ opacity: 0.75 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0.8 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={
+                isLive
+                  ? { opacity: 0, scale: 0.86 }
+                  : { opacity: 0.8 }
+              }
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             >
               {renderPillContent()}
             </motion.div>
@@ -962,10 +1144,10 @@ export function IslandShell(props: IslandShellProps) {
             <motion.div
               key="panel"
               className="panel-inner"
-              initial={isGlassView ? false : { opacity: 0, scale: 0.97 }}
+              initial={isArtic ? false : { opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={isGlassView ? undefined : { opacity: 0, scale: 0.98 }}
-              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              exit={isArtic ? undefined : { opacity: 0, scale: 0.98 }}
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
             >
               <nav className="panel-rail" data-no-drag aria-label="Разделы">
                 {PANEL_TABS.map((item) => (
@@ -980,8 +1162,15 @@ export function IslandShell(props: IslandShellProps) {
                     aria-current={tab === item.id ? 'page' : undefined}
                     onPointerDown={(e) => e.stopPropagation()}
                     onClick={(e) => selectTab(item.id, e)}
+                    data-icon-slot={item.id}
                   >
-                    {item.icon}
+                    <SlotIcon
+                      slot={item.id}
+                      files={iconFiles}
+                      choice={iconChoice}
+                      className="rail-slot-icon"
+                      builtin={item.icon}
+                    />
                   </button>
                 ))}
               </nav>

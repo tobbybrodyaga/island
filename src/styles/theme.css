@@ -2196,3 +2196,80 @@ html.glass-mode .app-root {
   height: 100%;
   object-fit: cover;
 }
+
+/* ---------- Режимы material × layout (этап 2 восстановления) ---------- */
+
+/* minimal: капсула без внутренних отступов */
+.island--layout-minimal .pill-inner {
+  padding: 0 6px;
+}
+
+/* extended: окно — только контейнер, фигуры сами по себе.
+   Зазоры без фона и без событий, клики ловят только фигуры. */
+.island.island--live {
+  border-radius: 0 !important;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.island--live .pill-inner {
+  padding: 0;
+  pointer-events: none;
+}
+
+.island--live .live-row {
+  pointer-events: none;
+}
+
+.island--live .live-shape {
+  pointer-events: auto;
+}
+
+.island--live .live-shape--pill .pill-activity {
+  justify-content: center;
+  padding: 0 10px;
+}
+
+/* Значок в левом круге под высоту компакта */
+.island--live .live-shape .live-icon,
+.island--live .live-shape .live-icon.icon-mask,
+.island--live .live-shape .live-icon.icon-png {
+  width: 12px;
+  height: 12px;
+}
+
+.live-icon--builtin {
+  display: grid;
+  place-items: center;
+}
+
+.live-icon--builtin svg,
+.live-icon--builtin .rail-icon-img {
+  width: 12px;
+  height: 12px;
+}
+
+.live-icon--builtin .rail-emoji {
+  font-size: 10px;
+}
+
+/* timer: цифры и подпись в одну линию по центру */
+.island--layout-timer .pill-activity--timer {
+  gap: 0;
+}
+
+/* task: название не толкает точку */
+.island--layout-task .pill-activity--task {
+  justify-content: flex-start;
+}
+
+/* Стекло: только верхний блик, без контура по кругу и без нижнего затенения */
+.island.island--glass:not(.island--live) {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22) !important;
+}
+
+/* У левого и правого края капсула вертикальная — текст идёт вдоль неё */
+.island--vertical:not(.island--expanded):not(.island--live) .pill-activity {
+  writing-mode: vertical-rl;
+  justify-content: center;
+}

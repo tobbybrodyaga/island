@@ -27,6 +27,7 @@ import { appendCompletedTask, appendNote, ensureWorkbookExists, getWorkbookPath 
 import {
   resolveStoredView,
   normalizeViewMode,
+  nextViewMode,
   type ViewMode,
 } from '../src/viewMode';
 import {
@@ -530,371 +531,17 @@ function emitEdge(): void {
   }
 }
 
-/** Win32 API: только клип главного HWND по капсуле (без child/accent — они крашат Chromium) */
-type WinClipApi = {
-  createRectRgn: (
-    left: number,
-    top: number,
-    right: number,
-    bottom: number,
-  ) => unknown;
-  createRoundRectRgn: (
-    left: number,
-    top: number,
-    right: number,
-    bottom: number,
-    ellipseW: number,
-    ellipseH: number,
-  ) => unknown;
-  combineRgn: (
-    dest: unknown,
-    src1: unknown,
-    src2: unknown,
-    mode: number,
-  ) => number;
-  deleteObject: (obj: unknown) => number;
-  setWindowRgn: (hwnd: number, hrgn: unknown, redraw: number) => number;
-  readClientSize: (hwnd: number) => { w: number; h: number };
-};
-
-const RGN_OR = 2;
-
-let winClipApi: WinClipApi | null = null;
-
-/** Ленивая загрузка gdi32/user32 через koffi */
-function getWinClipApi(): WinClipApi | null {
-  try {
-    if (process.platform !== 'win32') {
-      return null;
-    }
-    if (winClipApi) {
-      return winClipApi;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const koffi = require('koffi') as typeof import('koffi');
-    const gdi32 = koffi.load('gdi32.dll');
-    const user32 = koffi.load('user32.dll');
-    const RectType = koffi.struct('IslandRECT', {
-      left: 'long',
-      top: 'long',
-      right: 'long',
-      bottom: 'long',
-    });
-    const CreateRectRgn = gdi32.func('CreateRectRgn', 'void *', [
-      'int',
-      'int',
-      'int',
-      'int',
-    ]);
-    const CreateRoundRectRgn = gdi32.func(
-      'CreateRoundRectRgn',
-      'void *',
-      ['int', 'int', 'int', 'int', 'int', 'int'],
-    );
-    const CombineRgn = gdi32.func('CombineRgn', 'int', [
-      'void *',
-      'void *',
-      'void *',
-      'int',
-    ]);
-    const DeleteObject = gdi32.func('DeleteObject', 'int', ['void *']);
-    const SetWindowRgn = user32.func('SetWindowRgn', 'int', [
-      'uintptr',
-      'void *',
-      'int',
-    ]);
-    const GetClientRect = user32.func('GetClientRect', 'bool', [
-      'uintptr',
-      koffi.out(koffi.pointer(RectType)),
-    ]);
-
-    winClipApi = {
-      createRectRgn: CreateRectRgn,
-      createRoundRectRgn: CreateRoundRectRgn,
-      combineRgn: CombineRgn,
-      deleteObject: DeleteObject,
-      setWindowRgn: SetWindowRgn as WinClipApi['setWindowRgn'],
-      readClientSize: (hwnd: number) => {
-        const rect = { left: 0, top: 0, right: 0, bottom: 0 };
-        const ok = GetClientRect(hwnd, rect) as boolean;
-        if (!ok) {
-          return { w: 0, h: 0 };
-        }
-        return {
-          w: Math.max(0, rect.right - rect.left),
-          h: Math.max(0, rect.bottom - rect.top),
-        };
-      },
-    };
-    return winClipApi;
-  } catch (error) {
-    console.error('getWinClipApi failed:', error);
-    return null;
-  }
-}
-
-/** HWND текущего BrowserWindow как Number (надёжнее BigInt для koffi) */
-function getMainHwnd(): number | null {
-  try {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return null;
-    }
-    const buf = mainWindow.getNativeWindowHandle();
-    if (process.arch === 'ia32') {
-      return buf.readUInt32LE(0);
-    }
-    return Number(buf.readBigUInt64LE(0));
-  } catch (error) {
-    console.error('getMainHwnd failed:', error);
-    return null;
-  }
-}
-
 /**
- * HRGN капсулы / скруглённой панели в физических пикселях.
- * Геометрия как у CSS: free=stadium, edge=только «наружные» углы.
- */
-function createIslandRegion(
-  api: WinClipApi,
-  physW: number,
-  physH: number,
-  radiusPx: number,
-): unknown {
-  const w = Math.max(1, physW);
-  const h = Math.max(1, physH);
-  const r = Math.max(
-    1,
-    Math.min(Math.floor(radiusPx), Math.floor(w / 2), Math.floor(h / 2)),
-  );
-  const edge = currentEdge;
-
-  // Полная капсула / панель со всеми углами
-  if (edge === 'free' || currentMode === 'expanded') {
-    return api.createRoundRectRgn(0, 0, w + 1, h + 1, r * 2, r * 2);
-  }
-
-  // Сборка региона по scanline — совпадает с CSS (квадратные углы у края экрана)
-  const dest = api.createRectRgn(0, 0, 0, 0);
-  for (let y = 0; y < h; y += 1) {
-    let leftInset = 0;
-    let rightInset = 0;
-    const inTopCap = y < r;
-    const inBottomCap = y >= h - r;
-
-    if (edge === 'top') {
-      // Плоский верх, скругление снизу
-      if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        const inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-        leftInset = inset;
-        rightInset = inset;
-      }
-    } else if (edge === 'bottom') {
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        const inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-        leftInset = inset;
-        rightInset = inset;
-      }
-    } else if (edge === 'left') {
-      // Плоский левый край, скругление справа
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        rightInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      } else if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        rightInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      }
-    } else if (edge === 'right') {
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        leftInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      } else if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        leftInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      }
-    }
-
-    const x0 = leftInset;
-    const x1 = w - rightInset;
-    if (x1 > x0) {
-      const row = api.createRectRgn(x0, y, x1, y + 1);
-      api.combineRgn(dest, dest, row, RGN_OR);
-      api.deleteObject(row);
-    }
-  }
-  return dest;
-}
-
-/**
- * Радиус в DIP — строго как в theme.css у капсулы / панели.
- */
-function islandCornerRadiusDip(): number {
-  if (currentMode === 'expanded') {
-    return currentEdge === 'free' ? 24 : 22;
-  }
-  if (currentEdge === 'free') {
-    const bounds = mainWindow?.getBounds();
-    const h = bounds?.height ?? 20;
-    return Math.max(1, Math.floor(h / 2));
-  }
-  return 10;
-}
-
-/**
- * Scanline для win.setShape — та же геометрия, что у createIslandRegion (в DIP).
- */
-function buildCapsuleShapeRects(
-  width: number,
-  height: number,
-  radius: number,
-): Electron.Rectangle[] {
-  const w = Math.max(1, Math.round(width));
-  const h = Math.max(1, Math.round(height));
-  const r = Math.max(
-    1,
-    Math.min(Math.floor(radius), Math.floor(w / 2), Math.floor(h / 2)),
-  );
-  const edge = currentEdge;
-  const rects: Electron.Rectangle[] = [];
-
-  for (let y = 0; y < h; y += 1) {
-    let leftInset = 0;
-    let rightInset = 0;
-    const inTopCap = y < r;
-    const inBottomCap = y >= h - r;
-
-    if (edge === 'free' || currentMode === 'expanded') {
-      let inset = 0;
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      } else if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      }
-      leftInset = inset;
-      rightInset = inset;
-    } else if (edge === 'top' && inBottomCap) {
-      const dy = y - (h - r) + 0.5;
-      const inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      leftInset = inset;
-      rightInset = inset;
-    } else if (edge === 'bottom' && inTopCap) {
-      const dy = r - y - 0.5;
-      const inset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      leftInset = inset;
-      rightInset = inset;
-    } else if (edge === 'left') {
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        rightInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      } else if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        rightInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      }
-    } else if (edge === 'right') {
-      if (inTopCap) {
-        const dy = r - y - 0.5;
-        leftInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      } else if (inBottomCap) {
-        const dy = y - (h - r) + 0.5;
-        leftInset = Math.ceil(r - Math.sqrt(Math.max(0, r * r - dy * dy)));
-      }
-    }
-
-    const rw = w - leftInset - rightInset;
-    if (rw > 0) {
-      rects.push({ x: leftInset, y, width: rw, height: 1 });
-    }
-  }
-  return rects;
-}
-
-/**
- * Физический размер HWND в пикселях (не путать с DIP).
- * GetClientRect через koffi может молча дать 0 — тогда fallback на bounds×DPI.
- */
-function readPhysicalWindowSize(hwnd: number): { w: number; h: number } {
-  const bounds = mainWindow!.getBounds();
-  const display = screen.getDisplayMatching(bounds);
-  const scale = display.scaleFactor || 1;
-  const fallback = {
-    w: Math.max(1, Math.round(bounds.width * scale)),
-    h: Math.max(1, Math.round(bounds.height * scale)),
-  };
-
-  try {
-    const api = getWinClipApi();
-    if (!api) {
-      return fallback;
-    }
-    const fromApi = api.readClientSize(hwnd);
-    if (fromApi.w > 0 && fromApi.h > 0) {
-      return fromApi;
-    }
-  } catch (error) {
-    console.error('readPhysicalWindowSize api failed:', error);
-  }
-  return fallback;
-}
-
-/**
- * Снимает shape/region окна.
- */
-function clearGlassWindowClip(): void {
-  try {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      return;
-    }
-    try {
-      mainWindow.setShape([]);
-    } catch {
-      /* ignore */
-    }
-    try {
-      const api = getWinClipApi();
-      const hwnd = getMainHwnd();
-      if (api && hwnd != null) {
-        api.setWindowRgn(hwnd, null, 1);
-      }
-    } catch {
-      /* ignore */
-    }
-  } catch (error) {
-    console.error('clearGlassWindowClip failed:', error);
-  }
-}
-
-/**
- * Размер HWND только из bounds×DPI (GetClientRect через koffi бывает 0).
- */
-function physicalBoundsSize(): { w: number; h: number } {
-  const bounds = mainWindow!.getBounds();
-  const display = screen.getDisplayMatching(bounds);
-  const scale = display.scaleFactor || 1;
-  return {
-    w: Math.max(1, Math.round(bounds.width * scale)),
-    h: Math.max(1, Math.round(bounds.height * scale)),
-  };
-}
-
-/**
- * Клип HWND (setShape/SetWindowRgn) на этой связке Electron+Win11
- * то делает окно невидимым, то не режет Acrylic. Отключён для стабильности.
+ * Окно острова: только снимаем ограничение минимального размера,
+ * иначе Windows раздувает крошечное окно. Регион и форму окна не трогаем.
  */
 function syncGlassWindowRegion(): void {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) {
       return;
     }
-    clearGlassWindowClip();
-    try {
-      mainWindow.setMinimumSize(1, 1);
-      mainWindow.setMaximumSize(4096, 4096);
-    } catch {
-      /* ignore */
-    }
+    mainWindow.setMinimumSize(1, 1);
+    mainWindow.setMaximumSize(4096, 4096);
   } catch (error) {
     console.error('syncGlassWindowRegion failed:', error);
   }
@@ -1135,10 +782,6 @@ function applyLayout(mode: IslandMode): void {
   }
   emitEdge();
   syncGlassMaterial();
-  // После setBounds клиентский rect мог обновиться — клип ещё раз
-  if (viewMode.material === 'artic') {
-    setTimeout(() => syncGlassWindowRegion(), 0);
-  }
 }
 
 /** Магнит только у края (кактус всегда свободен) */
@@ -1232,7 +875,6 @@ function showIsland(): void {
       createWindow();
       return;
     }
-    // На случай «невидимого» региона после glass
     try {
       syncGlassWindowRegion();
     } catch {
@@ -1351,6 +993,16 @@ function createTray(): void {
           click: () => showIsland(),
         },
         {
+          label: 'Следующий вид',
+          click: () => {
+            try {
+              applyViewMode(nextViewMode(viewMode));
+            } catch (error) {
+              console.error('tray next view failed:', error);
+            }
+          },
+        },
+        {
           label: 'Открыть папку иконок',
           click: () => {
             try {
@@ -1466,18 +1118,6 @@ function createWindow(): void {
     console.error('setMinimumSize failed:', error);
   }
 
-  // Держим клип капсулы после move/resize (DWM/Electron могут сбросить регион)
-  mainWindow.on('move', () => {
-    if (viewMode.material === 'artic') {
-      syncGlassWindowRegion();
-    }
-  });
-  mainWindow.on('resize', () => {
-    if (viewMode.material === 'artic') {
-      syncGlassWindowRegion();
-    }
-  });
-
   const devUrl = process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     void mainWindow.loadURL(devUrl);
@@ -1492,7 +1132,6 @@ function createWindow(): void {
       if (viewMode.material === 'cactus') {
         currentEdge = 'free';
       }
-      // Снять возможный «пустой» регион от прошлых экспериментов
       syncGlassWindowRegion();
       applyZoomFactor();
       applyLayout('peek');
@@ -1853,26 +1492,25 @@ ipcMain.handle('island:set-mode', (_event, mode: IslandMode) => {
   }
 });
 
+/** Применяет режим острова: размер окна, материал, запись в файл состояния */
+function applyViewMode(next: ViewMode): void {
+  viewMode = next;
+  /** Кактус только в свободном полёте */
+  if (viewMode.material === 'cactus') {
+    currentEdge = 'free';
+  }
+  applyZoomFactor();
+  applyLayout(currentMode);
+  writeState({});
+}
+
 ipcMain.handle('island:set-view-mode', (_event, raw: unknown) => {
   try {
     const next = normalizeViewMode(raw);
     if (!next) {
       return { ok: false };
     }
-    viewMode = next;
-    /** Кактус только в свободном полёте */
-    if (viewMode.material === 'cactus') {
-      currentEdge = 'free';
-    }
-    applyZoomFactor();
-    if (currentMode !== 'expanded') {
-      applyLayout(currentMode === 'peek' ? 'peek' : 'collapsed');
-    } else {
-      applyLayout('expanded');
-      emitEdge();
-    }
-    writeState({});
-    syncGlassMaterial();
+    applyViewMode(next);
     return { ok: true, viewMode, edge: currentEdge, sizeScale };
   } catch (error) {
     console.error('set-view-mode failed:', error);
@@ -2046,10 +1684,20 @@ ipcMain.handle(
   'island:save-state',
   (_event, payload: { tasks?: unknown; settings?: unknown }) => {
     try {
+      const hadTimer =
+        viewMode.layout === 'extended' ? compactHasTimer() : false;
       writeState({
         tasks: payload.tasks,
         settings: payload.settings,
       });
+      /** В extended правый круг есть только при таймере — ширина окна меняется */
+      if (
+        viewMode.layout === 'extended' &&
+        currentMode !== 'expanded' &&
+        compactHasTimer() !== hadTimer
+      ) {
+        applyLayout(currentMode);
+      }
       return { ok: true };
     } catch (error) {
       console.error('save-state failed:', error);

@@ -46,8 +46,10 @@ const R_FREE_EXPANDED = 24;
 const R_EDGE_EXPANDED = 22;
 
 // Program.cs ждёт double 0..1 и сам красит RGB 12,12,14.
-// Альфа из задуманного '#99141414': 0x99 / 255.
-const TINT = 0x99 / 255;
+// Раскрытая панель: альфа из задуманного '#99141414' (0x99 / 255).
+// Компакт светлее, чтобы капсула читалась как стекло, а не как тёмная плашка.
+const TINT_EXPANDED = 0x99 / 255;
+const TINT_COMPACT = 0x66 / 255;
 const MAX_RESTARTS = 3;
 
 function resolveExe(): string {
@@ -165,7 +167,7 @@ export class GlassBackdrop {
       r: Math.max(0, Math.round(rDip * scale) - 1),
       edge,
       owner: hwndOf(w),
-      tint: TINT,
+      tint: this.state.expanded ? TINT_EXPANDED : TINT_COMPACT,
     });
   }
 
@@ -193,7 +195,7 @@ export class GlassBackdrop {
       this.send({
         cmd: 'shapes',
         owner: hwndOf(win),
-        tint: TINT,
+        tint: this.state.expanded ? TINT_EXPANDED : TINT_COMPACT,
         edge: this.state.edge,
         items,
       });

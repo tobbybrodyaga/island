@@ -15,7 +15,7 @@ await esbuild.build({
   target: 'node20',
   format: 'cjs',
   outdir: path.join(islandRoot, 'dist-electron'),
-  external: ['electron', 'exceljs', 'koffi'],
+  external: ['electron', 'exceljs'],
   sourcemap: true,
 });
 
