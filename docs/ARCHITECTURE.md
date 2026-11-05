@@ -11,62 +11,43 @@ Island — приложение на Electron для Windows. Это мален�
 ```mermaid
 flowchart TB
     user(["Пользователь"])
+    internet["Интернет: Google Translate или MyMemory"]
 
     subgraph renderer["Интерфейс: React в окне Electron (src/)"]
-        shell["IslandShell.tsx<br/>капсула, панель, морф, драг"]
-        panels["Вкладки панели<br/>задачи, карта, заметки, данные,<br/>скрины, буфер, перевод, фокус"]
-        store["tasksStore.ts<br/>задачи, секундомеры, Pomodoro"]
-        translator["translator.ts<br/>перевод текста"]
+        direction LR
+        shell["IslandShell<br/>капсула, панель, драг"]
+        panels["Вкладки<br/>задачи, карта, заметки,<br/>скрины, буфер, перевод"]
+        store["tasksStore<br/>задачи, таймеры"]
     end
 
-    bridge["preload.ts<br/>мост window.island"]
+    bridge["Мост window.island (preload.ts)"]
 
     subgraph main["Основной процесс: Electron (electron/)"]
-        window["main.ts<br/>окно, режимы, края экрана, трей"]
-        clipboardWatch["clipboardHistory.ts<br/>история буфера"]
-        shots["screenshotStore.ts<br/>скриншоты из буфера"]
-        excel["excelJournal.ts<br/>журнал Excel"]
-        icons["iconLibrary.ts<br/>значки"]
-        glass["glassBackdrop.ts<br/>управление стеклом"]
+        direction LR
+        window["main.ts<br/>окно, режимы, трей"]
+        watchers["clipboardHistory<br/>screenshotStore<br/>опрос буфера"]
+        excel["excelJournal<br/>журнал Excel"]
+        glass["glassBackdrop<br/>управление стеклом"]
     end
 
-    subgraph native["Отдельная программа: C# (native/)"]
-        backdrop["IslandBackdrop.exe<br/>размытие и преломление фона"]
-    end
+    system["Windows: буфер обмена, сон, трей"]
+    backdrop["IslandBackdrop.exe на C# (native/)<br/>размытие и преломление фона"]
 
     subgraph data["Данные на диске"]
-        state[("island-state.json<br/>задачи, настройки, окно")]
-        shotFiles[("island-screenshots/<br/>до 40 PNG и index.json")]
-        workbook[("Задачник.xlsx")]
-        localStore[("localStorage<br/>черновик и история заметок")]
+        direction LR
+        state[("island-state.json<br/>задачи, настройки")]
+        shotFiles[("island-screenshots<br/>до 40 PNG")]
+        workbook[("Задачник.xlsx<br/>журнал")]
+        localStore[("localStorage<br/>заметки")]
     end
 
-    system["Windows<br/>буфер обмена, сон, трей"]
-    internet["Google Translate<br/>или MyMemory"]
-
-    user --> shell
-    user -->|"меню в трее"| window
-    shell --> panels
-    panels --> store
-    panels --> translator
-    panels --> localStore
-    translator --> internet
-    shell <-->|"IPC"| bridge
-    store <-->|"IPC"| bridge
-    panels <-->|"IPC"| bridge
-    bridge <-->|"IPC"| window
-    window --> clipboardWatch
-    window --> shots
-    window --> excel
-    window --> icons
-    window --> glass
-    window --> state
-    shots --> shotFiles
-    excel --> workbook
-    system --> clipboardWatch
-    system --> shots
-    system --> window
-    glass -->|"команды JSON в stdin"| backdrop
+    user --> renderer
+    renderer -->|"перевод"| internet
+    renderer <-->|"IPC"| bridge
+    bridge <-->|"IPC"| main
+    system -->|"события"| main
+    main -->|"команды JSON"| backdrop
+    main --> data
 ```
 
 ## 2. Запуск и выход
