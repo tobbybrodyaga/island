@@ -7,3 +7,4 @@ release
 *.xlsx
 native/IslandBackdrop/bin
 native/IslandBackdrop/obj
+Claude outputs/
