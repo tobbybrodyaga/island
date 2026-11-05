@@ -6,7 +6,7 @@ Island — приложение на Electron для Windows. Это мален�
 
 ## 1. Из чего состоит приложение
 
-Приложение разделено на части. Интерфейс не обращается к диску и системе напрямую: он просит об этом основной процесс через мост `window.island`.
+Приложение разделено на части. Файлами и системой занимается основной процесс, а интерфейс просит его об этом через мост `window.island`. Сам интерфейс делает только две вещи: хранит заметки в `localStorage` и отправляет запросы на перевод.
 
 ```mermaid
 flowchart TB
@@ -38,11 +38,13 @@ flowchart TB
         state[("island-state.json<br/>задачи, настройки")]
         shotFiles[("island-screenshots<br/>до 40 PNG")]
         workbook[("Задачник.xlsx<br/>журнал")]
-        localStore[("localStorage<br/>заметки")]
     end
+
+    localStore[("localStorage<br/>заметки")]
 
     user --> renderer
     renderer -->|"перевод"| internet
+    renderer -->|"заметки"| localStore
     renderer <-->|"IPC"| bridge
     bridge <-->|"IPC"| main
     system -->|"события"| main
