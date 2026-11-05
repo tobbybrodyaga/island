@@ -709,6 +709,24 @@ function edgeMargin(edge: EdgeOrFree, side: Edge): number {
   return 0;
 }
 
+/** Запомненный центр острова: дробный, его не теряет округление координат */
+const anchorCenter = { x: Number.NaN, y: Number.NaN };
+/** Центр окна после последней раскладки: так поставил его сам main */
+const laidOutCenter = { x: Number.NaN, y: Number.NaN };
+
+/**
+ * Центр острова для смены размера. Из округлённых координат он при каждой смене
+ * уезжал бы на пол-пикселя, и остров шагал бы на пиксель за цикл, а от панели,
+ * сдвинутой краем экрана, капсула приземлялась бы в чужом месте.
+ * Новый центр заводит только сдвиг, которого main не делал, то есть драг.
+ */
+function stableCenter(axis: 'x' | 'y', center: number): number {
+  if (!(Math.abs(laidOutCenter[axis] - center) <= 1)) {
+    anchorCenter[axis] = center;
+  }
+  return anchorCenter[axis];
+}
+
 /** Целевой прямоугольник с якорем у края / центра */
 function boundsAnchored(mode: IslandMode): Electron.Rectangle {
   const area = getDisplay().workArea;
@@ -725,7 +743,7 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
 
   let next: Electron.Rectangle;
   if (currentEdge === 'top') {
-    const cx = start.x + start.width / 2;
+    const cx = stableCenter('x', start.x + start.width / 2);
     next = {
       x: Math.round(cx - size.width / 2),
       y: area.y + edgeMargin(currentEdge, 'top'),
@@ -733,7 +751,7 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
       height: size.height,
     };
   } else if (currentEdge === 'bottom') {
-    const cx = start.x + start.width / 2;
+    const cx = stableCenter('x', start.x + start.width / 2);
     next = {
       x: Math.round(cx - size.width / 2),
       y:
@@ -745,7 +763,7 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
       height: size.height,
     };
   } else if (currentEdge === 'left') {
-    const cy = start.y + start.height / 2;
+    const cy = stableCenter('y', start.y + start.height / 2);
     next = {
       x: area.x + edgeMargin(currentEdge, 'left'),
       y: Math.round(cy - size.height / 2),
@@ -753,7 +771,7 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
       height: size.height,
     };
   } else if (currentEdge === 'right') {
-    const cy = start.y + start.height / 2;
+    const cy = stableCenter('y', start.y + start.height / 2);
     next = {
       x:
         area.x + area.width - size.width - edgeMargin(currentEdge, 'right'),
@@ -763,8 +781,8 @@ function boundsAnchored(mode: IslandMode): Electron.Rectangle {
     };
   } else {
     next = {
-      x: Math.round(start.x + start.width / 2 - size.width / 2),
-      y: Math.round(start.y + start.height / 2 - size.height / 2),
+      x: Math.round(stableCenter('x', start.x + start.width / 2) - size.width / 2),
+      y: Math.round(stableCenter('y', start.y + start.height / 2) - size.height / 2),
       width: size.width,
       height: size.height,
     };
@@ -779,9 +797,17 @@ function applyLayout(mode: IslandMode): void {
     return;
   }
   currentMode = mode;
+  const before = mainWindow.getBounds();
   const target = boundsAnchored(mode);
   freeX = target.x;
   freeY = target.y;
+  // Новый размер окна рендерер увидит и пришлёт свои формы. До тех пор стекло
+  // стоит на месте. Сдвиг без смены размера ответа не вызовет: там формы едут с окном.
+  if (before.width !== target.width || before.height !== target.height) {
+    backdrop?.rebaseShapes(before.x - target.x, before.y - target.y);
+  }
+  laidOutCenter.x = target.x + target.width / 2;
+  laidOutCenter.y = target.y + target.height / 2;
   mainWindow.setBounds(target, false);
   try {
     backdrop?.setState({

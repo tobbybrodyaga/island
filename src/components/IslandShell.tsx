@@ -3,6 +3,7 @@ import {
   ReactNode,
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
 } from 'react';
@@ -58,6 +59,48 @@ const DEFAULT_VIEW: ViewMode = { material: 'black', layout: 'minimal' };
 const SPRING_MORPH = { type: 'spring', duration: 0.42, bounce: 0.18 } as const;
 const SPRING_COLLAPSE = { type: 'spring', duration: 0.34, bounce: 0 } as const;
 const SPRING_LAYOUT = { type: 'spring', duration: 0.4, bounce: 0.16 } as const;
+/** Сворачивание: панель гаснет первой, форма стягивается с этой задержкой (Stageshow) */
+const PANEL_FADE_MS = 120;
+const COLLAPSE_LAG_MS = 70;
+/** Контент капсулы: уходит быстро и размыто, входит, проясняясь, когда форма уже на месте */
+const PILL_CONTENT_HIDDEN = { opacity: 0, scale: 0.9, filter: 'blur(6px)' };
+
+/**
+ * Геометрия extended в CSS-пикселях, те же числа, что в resolveSize (main.ts).
+ * Зум окна эти размеры не меняет, поэтому от размера окна фигуры не зависят:
+ * замер посреди раскрытия или сворачивания увёл бы их за пределы окна.
+ */
+const LIVE_SIZE = 20;
+const LIVE_GAP = 8;
+const LIVE_PILL_WIDTH = 148;
+const LIVE_PILL_LEFT = LIVE_SIZE + LIVE_GAP;
+/** Круг в покое: внутри торца капсулы. Снаружи: через зазор после неё */
+const LIVE_BUD_IN = LIVE_PILL_LEFT + LIVE_PILL_WIDTH - LIVE_SIZE;
+const LIVE_BUD_OUT = LIVE_PILL_LEFT + LIVE_PILL_WIDTH + LIVE_GAP;
+/** Ширина окна посередине между «один круг» и «два круга» */
+const LIVE_WIDE_FROM = LIVE_BUD_OUT - LIVE_GAP / 2 + LIVE_SIZE / 2;
+
+/** Затухающая пружина как CSS linear(): zeta — демпфирование, omega — жёсткость */
+function springEasing(zeta: number, omega: number, ms: number, steps = 40): string {
+  const damped = omega * Math.sqrt(1 - zeta * zeta);
+  const points: string[] = [];
+  for (let i = 0; i <= steps; i += 1) {
+    const t = (i / steps) * (ms / 1000);
+    const x =
+      i === steps
+        ? 1
+        : 1 -
+          Math.exp(-zeta * omega * t) *
+            (Math.cos(damped * t) + ((zeta * omega) / damped) * Math.sin(damped * t));
+    points.push(x.toFixed(4));
+  }
+  return `linear(${points.join(', ')})`;
+}
+
+/** Отпочковывание: наружу с лёгким перелётом, обратно без него и быстрее,
+ *  чтобы круг втянулся до того, как main сузит окно */
+const BUD_OUT = { ease: springEasing(0.7, 15, 500), ms: 500 };
+const BUD_IN = { ease: springEasing(0.98, 22, 300), ms: 300 };
 
 /** Плотные заполненные иконки в духе классических SF Symbols */
 const PANEL_TABS: { id: PanelTab; label: string; icon: ReactNode }[] = [
@@ -419,6 +462,11 @@ export function IslandShell(props: IslandShellProps) {
   const [tab, setTab] = useState<PanelTab>('tasks');
   const [phrase, setPhrase] = useState(() => pickMotivationPhrase());
   const [isDragging, setIsDragging] = useState(false);
+  /** Палец на компакте: остров чуть сжимается под ним */
+  const [pressed, setPressed] = useState(false);
+  /** Ширина окна в CSS-пикселях: есть ли место под второй круг extended */
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const gooId = useId();
   const [iconFiles, setIconFiles] = useState<IconFiles>({});
   const [iconChoice, setIconChoice] = useState<Record<string, string>>({});
   const shellRef = useRef<HTMLDivElement>(null);
@@ -595,7 +643,13 @@ export function IslandShell(props: IslandShellProps) {
       const bl = edgeNow === 'bottom' || edgeNow === 'left' ? 0 : r;
       root.style.clipPath = `inset(${y}px ${W - x - w}px ${H - y - h}px ${x}px round ${tl}px ${tr}px ${br}px ${bl}px)`;
       if (panelRef.current) {
-        panelRef.current.style.opacity = String(Math.max(0, Math.min(1, (k - 0.4) / 0.6)));
+        // Контент — отдельный слой в конечных позициях: проявляется, подрастая
+        // к месту из капсулы, и не растягивается вместе с формой
+        const shown = Math.max(0, Math.min(1, (k - 0.4) / 0.6));
+        const panel = panelRef.current;
+        panel.style.opacity = String(shown);
+        panel.style.transformOrigin = `${from.x + from.w / 2}px ${from.y + from.h / 2}px`;
+        panel.style.transform = `scale(${0.96 + 0.04 * shown})`;
       }
       if (isGlassMaterial(viewModeRef.current.material) && window.island?.sendBackdropShapes) {
         const zoom = sizeScaleRef.current || 1;
@@ -616,6 +670,8 @@ export function IslandShell(props: IslandShellProps) {
     }
     if (panelRef.current) {
       panelRef.current.style.opacity = '';
+      panelRef.current.style.transform = '';
+      panelRef.current.style.transformOrigin = '';
     }
   }
 
@@ -759,6 +815,8 @@ export function IslandShell(props: IslandShellProps) {
       if (root) {
         root.style.clipPath = 'inset(50%)';
       }
+      // Прямоугольник от прошлого раскрытия не годится: пока нового нет, морф молчит
+      morphFromRef.current = null;
       morphActiveRef.current = true;
       morphProgress.set(0);
       sentModeRef.current = 'expanded';
@@ -809,10 +867,30 @@ export function IslandShell(props: IslandShellProps) {
     morphBusyRef.current = true;
     try {
       if (morphFromRef.current) {
+        const from = morphFromRef.current;
+        // Сначала гаснет содержимое, форма стягивается чуть позже, когда ему
+        // уже нечего обрезать. fill: forwards перекрывает прозрачность из applyMorph.
+        panelRef.current?.animate(
+          [
+            { opacity: 1, transform: 'scale(1)' },
+            { opacity: 0, transform: 'scale(0.97)' },
+          ],
+          {
+            duration: PANEL_FADE_MS,
+            easing: 'ease-in',
+            fill: 'forwards',
+          },
+        );
+        if (panelRef.current) {
+          panelRef.current.style.transformOrigin = `${from.x + from.w / 2}px ${from.y + from.h / 2}px`;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, COLLAPSE_LAG_MS));
         morphActiveRef.current = true;
         await animate(morphProgress, 0, SPRING_COLLAPSE);
       }
       sentModeRef.current = 'collapsed';
+      // Координаты морфа считаны от большого окна: в сжавшемся они увели бы стекло
+      morphActiveRef.current = false;
       await window.island?.setMode('collapsed');
     } catch (err) {
       console.error('collapseAnimated failed:', err);
@@ -933,6 +1011,19 @@ export function IslandShell(props: IslandShellProps) {
     state.tracking = false;
     state.dragging = false;
     state.pointerId = -1;
+    // Клик раскрывает остров: сжатие снимается мгновенно, иначе морф стартует
+    // из ещё не разжатой формы. Драг и отмена отпускают его на пружине.
+    const willOpen = click && !wasDragging && modeRef.current !== 'expanded';
+    const root = shellRef.current;
+    if (willOpen && root) {
+      root.style.transition = 'none';
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          root.style.transition = '';
+        }),
+      );
+    }
+    setPressed(false);
     try {
       if (pointerId >= 0 && shellRef.current?.hasPointerCapture?.(pointerId)) {
         shellRef.current.releasePointerCapture(pointerId);
@@ -996,6 +1087,9 @@ export function IslandShell(props: IslandShellProps) {
     } catch {
       /* без захвата сессию закроют buttons === 0 и blur */
     }
+    if (modeRef.current !== 'expanded') {
+      setPressed(true);
+    }
   }
 
   function handlePointerMove(e: React.PointerEvent) {
@@ -1019,6 +1113,7 @@ export function IslandShell(props: IslandShellProps) {
       }
       state.dragging = true;
       setIsDragging(true);
+      setPressed(false);
       try {
         void window.island?.dragStart();
       } catch (err) {
@@ -1121,6 +1216,17 @@ export function IslandShell(props: IslandShellProps) {
   const isLive = layout === 'extended' && mode !== 'expanded' && !showCactus;
   /** Значок левого круга: задача, фокус или текущая вкладка */
   const liveSlot = showPomodoroInPill ? 'focus' : props.activeTask ? 'tasks' : tab;
+  /** Круг таймера снаружи, только когда main уже расширил окно (он делает это с задержкой) */
+  const budOut = isLive && hasTimer && windowWidth > LIVE_WIDE_FROM;
+  /** Чёрные фигуры сливаются через goo-фильтр; стекло рисует подложка, ему фильтр не нужен */
+  const liveGoo = isLive && !isGlass;
+
+  /** Окно меняет main, а не CSS: слушаем всё время, чтобы значение не устаревало */
+  useEffect(() => {
+    const onResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   useEffect(() => {
     try {
@@ -1141,7 +1247,7 @@ export function IslandShell(props: IslandShellProps) {
   useEffect(() => {
     pushBackdropShapes();
     followBackdrop();
-  }, [mode, edge, material, layout, hasTimer, pushBackdropShapes, followBackdrop]);
+  }, [mode, edge, material, layout, hasTimer, budOut, pressed, pushBackdropShapes, followBackdrop]);
 
   /** Окно или фигуры поменяли размер — новая геометрия подложки */
   useEffect(() => {
@@ -1164,7 +1270,7 @@ export function IslandShell(props: IslandShellProps) {
     } catch (err) {
       console.error(err);
     }
-  }, [mode, layout, hasTimer, pushBackdropShapes]);
+  }, [mode, layout, hasTimer, budOut, pushBackdropShapes]);
 
   const islandClass = [
     'island',
@@ -1222,14 +1328,51 @@ export function IslandShell(props: IslandShellProps) {
     );
   }
 
-  /** Компакт extended: левый круг, центральный pill, правый круг с кольцом */
+  /**
+   * Компакт extended: левый круг, центральный pill, правый круг с кольцом.
+   * Правый круг отпочковывается от торца капсулы (Stageshow, dynamic-island):
+   * в покое он спрятан в её торце, с таймером выходит на своё место, и
+   * goo-фильтр тянет между ними мягкую перемычку. Фигуры и содержимое —
+   * разные слои: фильтр трогает только чёрные формы, текст не размывается.
+   */
   function renderLiveRow() {
     const builtin =
       PANEL_TABS.find((item) => item.id === liveSlot)?.icon ?? <PillTaskIcon />;
+    const budSpring = budOut ? BUD_OUT : BUD_IN;
+    const lead = { left: 0, width: LIVE_SIZE };
+    const pill = { left: LIVE_PILL_LEFT, width: LIVE_PILL_WIDTH };
+    const bud = {
+      left: budOut ? LIVE_BUD_OUT : LIVE_BUD_IN,
+      width: LIVE_SIZE,
+      transitionDuration: `${budSpring.ms}ms, ${budSpring.ms}ms`,
+      transitionTimingFunction: `${budSpring.ease}, ${budSpring.ease}`,
+      transitionDelay: budOut ? '60ms, 60ms' : '0ms, 0ms',
+    };
     return (
-      <div className="live-row">
+      <div className="live-row" data-goo={liveGoo || undefined}>
+        {liveGoo ? (
+          <>
+            <svg className="live-goo-defs" width="0" height="0" aria-hidden="true">
+              <filter id={gooId} x="-20%" y="-60%" width="140%" height="220%">
+                {/* Размытие короче зазора: перемычка тянется только у близких форм */}
+                <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="b" />
+                <feColorMatrix in="b" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 12 -5" />
+              </filter>
+            </svg>
+            <div className="live-goo" style={{ filter: `url(#${gooId})` }} aria-hidden="true">
+              <span className="live-blob live-blob--circle" style={lead} />
+              <span className="live-blob live-blob--pill" style={pill} />
+              <span
+                className="live-blob live-blob--circle live-bud"
+                data-out={budOut || undefined}
+                style={bud}
+              />
+            </div>
+          </>
+        ) : null}
         <div
           className="live-shape live-shape--circle"
+          style={lead}
           data-backdrop-shape
           data-icon-slot={liveSlot}
         >
@@ -1241,7 +1384,7 @@ export function IslandShell(props: IslandShellProps) {
             builtin={<span className="live-icon live-icon--builtin">{builtin}</span>}
           />
         </div>
-        <div className="live-shape live-shape--pill" data-backdrop-shape>
+        <div className="live-shape live-shape--pill" style={pill} data-backdrop-shape>
           {hasTimer ? (
             renderHeroTime()
           ) : (
@@ -1250,11 +1393,17 @@ export function IslandShell(props: IslandShellProps) {
             </div>
           )}
         </div>
-        {hasTimer ? (
-          <div className="live-shape live-shape--circle" data-backdrop-shape>
+        {/* Стеклу подложка рисует круг только снаружи: в торце капсулы его нет */}
+        <div
+          className="live-shape live-shape--circle live-bud"
+          data-out={budOut || undefined}
+          data-backdrop-shape={budOut ? '' : undefined}
+          style={bud}
+        >
+          <span className="live-bud-content" data-on={budOut || undefined}>
             <ProgressRing progress={ringProgress} />
-          </div>
-        ) : null}
+          </span>
+        </div>
       </div>
     );
   }
@@ -1304,6 +1453,7 @@ export function IslandShell(props: IslandShellProps) {
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerAbort}
         onLostPointerCapture={handlePointerAbort}
+        data-press={pressed || undefined}
         style={{ width: '100%', height: '100%' }}
       >
         {/* Без mode="wait": панель монтируется сразу, её форму ведёт морф */}
@@ -1312,14 +1462,25 @@ export function IslandShell(props: IslandShellProps) {
             <motion.div
               key={`pill-${material}-${layout}`}
               className="pill-inner"
-              initial={{ opacity: 0.75 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={
-                isLive
-                  ? { opacity: 0, scale: 0.86, transition: { duration: 0.12 } }
-                  : { opacity: 0, transition: { duration: 0.12 } }
-              }
-              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+              // В extended здесь лежат сами фигуры: их форму и подложку не трогаем,
+              // содержимое проявляется внутри них (.live-shape в theme.css)
+              initial={isLive ? false : PILL_CONTENT_HIDDEN}
+              animate={{
+                opacity: 1,
+                scale: 1,
+                filter: 'blur(0px)',
+                // Без постоянного filter слой не держит лишний буфер
+                transitionEnd: { filter: 'none' },
+              }}
+              exit={{
+                ...(isLive ? { opacity: 0 } : PILL_CONTENT_HIDDEN),
+                transition: { duration: 0.12, ease: 'easeIn' },
+              }}
+              transition={{
+                opacity: { duration: 0.24, ease: 'easeOut', delay: 0.08 },
+                scale: { duration: 0.4, ease: [0.25, 1, 0.5, 1], delay: 0.08 },
+                filter: { duration: 0.26, ease: 'easeOut', delay: 0.08 },
+              }}
             >
               {renderPillContent()}
             </motion.div>

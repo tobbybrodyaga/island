@@ -134,6 +134,19 @@ export class GlassBackdrop {
     this.push();
   }
 
+  /**
+   * Окно вот-вот сменит размер и сдвинется, а формы заданы относительно него.
+   * Сдвигает их навстречу, чтобы стекло осталось на месте экрана, пока рендерер
+   * не пришлёт геометрию под новое окно. Сам ничего не отправляет.
+   */
+  rebaseShapes(dx: number, dy: number): void {
+    if (!this.state.shapes?.length) return;
+    this.state = {
+      ...this.state,
+      shapes: this.state.shapes.map((shape) => ({ ...shape, x: shape.x + dx, y: shape.y + dy })),
+    };
+  }
+
   /** Отправить текущую геометрию. Вызывать и сразу после своего setPosition/setBounds в драге. */
   push(): void {
     const w = this.win;

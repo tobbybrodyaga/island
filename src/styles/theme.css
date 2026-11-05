@@ -116,7 +116,40 @@ html.glass-mode .app-root {
   position: relative;
   width: 100%;
   height: 100%;
-  transition: border-radius 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  transition:
+    border-radius 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    scale 0.34s cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* Нажатие на компакт: остров чуть сжимается под пальцем (Stageshow, dynamic-island) */
+.island[data-press]:not(.island--expanded) {
+  scale: 0.965;
+  transition:
+    border-radius 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+    scale 0.22s cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+/* Прилипшая к краю сторона остаётся на краю */
+.island--edge-top {
+  transform-origin: 50% 0;
+}
+
+.island--edge-bottom {
+  transform-origin: 50% 100%;
+}
+
+.island--edge-left {
+  transform-origin: 0 50%;
+}
+
+.island--edge-right {
+  transform-origin: 100% 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .island[data-press]:not(.island--expanded) {
+    scale: 1;
+  }
 }
 
 /* Закреплён сверху: notch, плоский верх, мягкий низ */
@@ -183,7 +216,6 @@ html.glass-mode .app-root {
 }
 
 .island--glass .pill-inner {
-  position: relative;
   padding: 0 8px;
   z-index: 1;
 }
@@ -261,7 +293,6 @@ html.glass-mode .app-root {
   z-index: 0;
 }
 
-.island--glass .pill-inner,
 .island--glass .panel-inner {
   position: relative;
   z-index: 1;
@@ -522,7 +553,10 @@ html.glass-mode .app-root {
   box-shadow: none;
 }
 
+/* Вне потока: панель, снимаемая при сворачивании, не отодвигает капсулу */
 .pill-inner {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2570,4 +2604,132 @@ html.glass-mode .app-root {
 .island--material-clear.island--expanded .motivation,
 .island--material-clear.island--expanded .panel-content {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- Отпочковывание круга таймера (extended) ----------
+   Фигуры стоят по замеренной ширине окна (left/width из IslandShell).
+   У чёрного острова формы рисует слой .live-goo под goo-фильтром,
+   а .live-shape держат только содержимое. */
+
+.live-row {
+  position: relative;
+}
+
+.live-row > .live-shape {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  height: auto;
+  aspect-ratio: auto;
+}
+
+.live-goo-defs {
+  position: absolute;
+}
+
+.live-goo {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.live-blob {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #000;
+  border-radius: 999px;
+}
+
+/* Сторона у края экрана уходит за окно: размытие фильтра не скругляет её */
+.island--edge-top .live-blob {
+  top: -4px;
+  border-radius: 0 0 10px 10px;
+}
+
+.island--edge-bottom .live-blob {
+  bottom: -4px;
+  border-radius: 10px 10px 0 0;
+}
+
+.island--edge-left .live-blob {
+  border-radius: 0 10px 10px 0;
+}
+
+.island--edge-right .live-blob {
+  border-radius: 10px 0 0 10px;
+}
+
+.live-row[data-goo] > .live-shape {
+  background: transparent;
+}
+
+/* Круг: в покое маленький и спрятан в торце капсулы. Длительность и пружину
+   задаёт inline-стиль: наружу с перелётом, обратно без него */
+.live-bud {
+  scale: 0.45;
+  transition-property: left, scale;
+}
+
+.live-bud[data-out] {
+  scale: 1;
+}
+
+.island--live .live-row > .live-bud:not([data-out]) {
+  pointer-events: none;
+}
+
+/* Стеклянный круг рисует подложка только снаружи, своей кромки в покое нет */
+.island--glass .live-bud:not([data-out]) {
+  visibility: hidden;
+}
+
+/* Содержимое фигур проявляется само: сами фигуры с подложкой стоят на месте */
+.island--live .live-shape:not(.live-bud) > * {
+  animation: live-content-in 0.36s cubic-bezier(0.25, 1, 0.5, 1) 0.08s backwards;
+}
+
+@keyframes live-content-in {
+  from {
+    opacity: 0;
+    scale: 0.9;
+    filter: blur(6px);
+  }
+}
+
+/* Кольцо уходит быстро и размыто, входит, проясняясь, когда круг уже вышел */
+.live-bud-content {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  scale: 0.88;
+  filter: blur(4px);
+  transition:
+    opacity 0.12s ease-in,
+    scale 0.14s ease-in,
+    filter 0.12s ease-in;
+}
+
+.live-bud-content[data-on] {
+  opacity: 1;
+  scale: 1;
+  filter: none;
+  transition:
+    opacity 0.24s ease-out 0.3s,
+    scale 0.4s cubic-bezier(0.25, 1, 0.5, 1) 0.3s,
+    filter 0.26s ease-out 0.3s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-bud,
+  .live-bud-content,
+  .live-bud-content[data-on] {
+    transition: none !important;
+  }
+
+  .island--live .live-shape:not(.live-bud) > * {
+    animation: none;
+  }
 }
