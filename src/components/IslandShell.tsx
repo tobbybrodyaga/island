@@ -1456,7 +1456,9 @@ export function IslandShell(props: IslandShellProps) {
         data-press={pressed || undefined}
         style={{ width: '100%', height: '100%' }}
       >
-        {/* Без mode="wait": панель монтируется сразу, её форму ведёт морф */}
+        {/* Капсула уходит с анимацией, а панель лежит вне AnimatePresence: внутри него
+            плашка rail-lens оставляла запись при смене вкладки, панель не снималась
+            и следующее раскрытие получало её же, погашенной анимацией сворачивания */}
         <AnimatePresence initial={false}>
           {mode !== 'expanded' ? (
             <motion.div
@@ -1484,157 +1486,152 @@ export function IslandShell(props: IslandShellProps) {
             >
               {renderPillContent()}
             </motion.div>
-          ) : (
-            <motion.div
-              key="panel"
-              ref={panelRef}
-              className="panel-inner"
-              initial={false}
-              exit={{ opacity: 0, transition: { duration: 0 } }}
-            >
-              <nav className="panel-rail" data-no-drag aria-label="Разделы">
-                {PANEL_TABS.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className={
-                      tab === item.id ? 'rail-btn rail-btn--active' : 'rail-btn'
-                    }
-                    title={item.label}
-                    aria-label={item.label}
-                    aria-current={tab === item.id ? 'page' : undefined}
-                    onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => selectTab(item.id, e)}
-                    data-icon-slot={item.id}
-                  >
-                    {/* Стеклянная плашка выбора перетекает между вкладками (GlassTabsIndicator) */}
-                    {tab === item.id ? (
-                      <motion.span
-                        layoutId="rail-lens"
-                        className="rail-lens"
-                        transition={SPRING_LAYOUT}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                    <span className="rail-btn-icon">
-                      <SlotIcon
-                        slot={item.id}
-                        files={iconFiles}
-                        choice={iconChoice}
-                        className="rail-slot-icon"
-                        builtin={item.icon}
-                      />
-                    </span>
-                  </button>
-                ))}
-              </nav>
-
-              <div className="panel-main">
-                <header className="panel-header">
-                  <div
-                    className="panel-drag"
-                    data-drag-handle
-                    title="Перетащить"
-                  >
-                    <p className="motivation">{phrase}</p>
-                  </div>
-                  <div className="panel-actions" data-no-drag>
-                    <button
-                      type="button"
-                      className="traffic traffic--excel"
-                      aria-label="Открыть Задачник"
-                      title="Задачник Excel"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        try {
-                          void window.island?.openWorkbook();
-                        } catch (err) {
-                          console.error(err);
-                        }
-                      }}
-                    >
-                      <span>XL</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="traffic traffic--min"
-                      aria-label="Свернуть"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={collapseIsland}
-                    />
-                    <button
-                      type="button"
-                      className="traffic traffic--close"
-                      aria-label="Закрыть"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={handleQuit}
-                    />
-                  </div>
-                </header>
-
-                <div className="panel-content" data-no-drag>
-                  {tab === 'tasks' && (
-                    <TaskList
-                      ready={props.ready}
-                      error={props.error}
-                      tasks={props.tasks}
-                      activeTaskId={props.activeTaskId}
-                      now={props.now}
-                      onAdd={props.onAdd}
-                      onActivate={props.onActivate}
-                      onToggleDone={props.onToggleDone}
-                      onRemove={props.onRemove}
-                      onSetCategory={props.onSetCategory}
-                      onSetWeight={props.onSetWeight}
-                      onAddSubtask={props.onAddSubtask}
-                      onToggleSubtask={props.onToggleSubtask}
-                      onRemoveSubtask={props.onRemoveSubtask}
-                      onUpdateTitle={props.onUpdateTitle}
-                      onUpdateSubtaskTitle={props.onUpdateSubtaskTitle}
-                      onStartTimer={props.onStartTimer}
-                      onPauseTimer={props.onPauseTimer}
-                      onResetTimer={props.onResetTimer}
-                    />
-                  )}
-
-                  {tab === 'map' && (
-                    <EfficiencyMap
-                      activityByDay={props.activityByDay}
-                      onRemoveStroke={props.onRemoveMapStroke}
-                    />
-                  )}
-
-                  {tab === 'notes' && <NotesPanel />}
-
-                  {tab === 'links' && <QuickDataPanel />}
-
-                  {tab === 'shots' && <ScreenshotsPanel />}
-
-                  {tab === 'clipboard' && <ClipboardPanel />}
-
-                  {tab === 'translate' && <TranslatorPanel />}
-
-                  {tab === 'focus' && (
-                    <PomodoroPanel
-                      settings={props.settings}
-                      now={props.now}
-                      hasActiveTask={Boolean(
-                        props.activeTask && !props.activeTask.done,
-                      )}
-                      onStart={props.onStartPomodoro}
-                      onPause={props.onPausePomodoro}
-                      onStop={props.onStopPomodoro}
-                      onStartBreak={props.onStartBreak}
-                      onFocusMinutes={props.onFocusMinutes}
-                      onBreakMinutes={props.onBreakMinutes}
-                    />
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
+        {mode === 'expanded' ? (
+          <div ref={panelRef} className="panel-inner">
+            <nav className="panel-rail" data-no-drag aria-label="Разделы">
+              {PANEL_TABS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={
+                    tab === item.id ? 'rail-btn rail-btn--active' : 'rail-btn'
+                  }
+                  title={item.label}
+                  aria-label={item.label}
+                  aria-current={tab === item.id ? 'page' : undefined}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => selectTab(item.id, e)}
+                  data-icon-slot={item.id}
+                >
+                  {/* Стеклянная плашка выбора перетекает между вкладками (GlassTabsIndicator) */}
+                  {tab === item.id ? (
+                    <motion.span
+                      layoutId="rail-lens"
+                      className="rail-lens"
+                      transition={SPRING_LAYOUT}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span className="rail-btn-icon">
+                    <SlotIcon
+                      slot={item.id}
+                      files={iconFiles}
+                      choice={iconChoice}
+                      className="rail-slot-icon"
+                      builtin={item.icon}
+                    />
+                  </span>
+                </button>
+              ))}
+            </nav>
+
+            <div className="panel-main">
+              <header className="panel-header">
+                <div
+                  className="panel-drag"
+                  data-drag-handle
+                  title="Перетащить"
+                >
+                  <p className="motivation">{phrase}</p>
+                </div>
+                <div className="panel-actions" data-no-drag>
+                  <button
+                    type="button"
+                    className="traffic traffic--excel"
+                    aria-label="Открыть Задачник"
+                    title="Задачник Excel"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      try {
+                        void window.island?.openWorkbook();
+                      } catch (err) {
+                        console.error(err);
+                      }
+                    }}
+                  >
+                    <span>XL</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="traffic traffic--min"
+                    aria-label="Свернуть"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={collapseIsland}
+                  />
+                  <button
+                    type="button"
+                    className="traffic traffic--close"
+                    aria-label="Закрыть"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={handleQuit}
+                  />
+                </div>
+              </header>
+
+              <div className="panel-content" data-no-drag>
+                {tab === 'tasks' && (
+                  <TaskList
+                    ready={props.ready}
+                    error={props.error}
+                    tasks={props.tasks}
+                    activeTaskId={props.activeTaskId}
+                    now={props.now}
+                    onAdd={props.onAdd}
+                    onActivate={props.onActivate}
+                    onToggleDone={props.onToggleDone}
+                    onRemove={props.onRemove}
+                    onSetCategory={props.onSetCategory}
+                    onSetWeight={props.onSetWeight}
+                    onAddSubtask={props.onAddSubtask}
+                    onToggleSubtask={props.onToggleSubtask}
+                    onRemoveSubtask={props.onRemoveSubtask}
+                    onUpdateTitle={props.onUpdateTitle}
+                    onUpdateSubtaskTitle={props.onUpdateSubtaskTitle}
+                    onStartTimer={props.onStartTimer}
+                    onPauseTimer={props.onPauseTimer}
+                    onResetTimer={props.onResetTimer}
+                  />
+                )}
+
+                {tab === 'map' && (
+                  <EfficiencyMap
+                    activityByDay={props.activityByDay}
+                    onRemoveStroke={props.onRemoveMapStroke}
+                  />
+                )}
+
+                {tab === 'notes' && <NotesPanel />}
+
+                {tab === 'links' && <QuickDataPanel />}
+
+                {tab === 'shots' && <ScreenshotsPanel />}
+
+                {tab === 'clipboard' && <ClipboardPanel />}
+
+                {tab === 'translate' && <TranslatorPanel />}
+
+                {tab === 'focus' && (
+                  <PomodoroPanel
+                    settings={props.settings}
+                    now={props.now}
+                    hasActiveTask={Boolean(
+                      props.activeTask && !props.activeTask.done,
+                    )}
+                    onStart={props.onStartPomodoro}
+                    onPause={props.onPausePomodoro}
+                    onStop={props.onStopPomodoro}
+                    onStartBreak={props.onStartBreak}
+                    onFocusMinutes={props.onFocusMinutes}
+                    onBreakMinutes={props.onBreakMinutes}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </motion.div>
     </div>
   );
