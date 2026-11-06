@@ -2,6 +2,47 @@
 
 Чёрный компактный остров поверх окон: задачи, секундомеры, Pomodoro.
 
+```mermaid
+flowchart LR
+    user(["Вы"])
+
+    subgraph ui["Интерфейс: React"]
+        direction TB
+        capsule["Капсула<br/>таймер и задача"]
+        panel["Панель<br/>8 вкладок"]
+        capsule <-->|"клик, Esc"| panel
+    end
+
+    subgraph core["Electron"]
+        direction TB
+        window["Окно и трей"]
+        watch["Буфер обмена"]
+        window ~~~ watch
+    end
+
+    subgraph out["Данные и стекло"]
+        direction TB
+        state[("island-state.json")]
+        excel[("Задачник.xlsx")]
+        glass["IslandBackdrop.exe"]
+        state ~~~ excel ~~~ glass
+    end
+
+    user --> ui
+    ui <-->|"IPC"| core
+    core --> out
+
+    classDef island fill:#000000,stroke:#3a3a3c,color:#ffffff
+    classDef accent fill:#0a84ff,stroke:#0a84ff,color:#ffffff
+    classDef result fill:#1c1c1e,stroke:#30d158,color:#ffffff
+    class capsule,panel island
+    class window,watch accent
+    class state,excel,glass result
+    style ui fill:transparent,stroke:#8e8e93
+    style core fill:transparent,stroke:#8e8e93
+    style out fill:transparent,stroke:#8e8e93
+```
+
 Как всё устроено внутри: [блок-схемы работы острова](docs/ARCHITECTURE.md).
 
 ## Требования
